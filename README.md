@@ -62,7 +62,7 @@ The **Windows build and release** workflow builds and tests a self-contained Win
 | fix: correct a problem | Patch |
 | feat: add a capability | Minor |
 | feat!: change compatibility, or a BREAKING CHANGE: footer | Major |
-| docs:, test:, ci:, refactor:, chore: | No release on their own; included in the next release notes |
+| docs:, test:, ci:, refactor:, chore: | No release on their own; omitted from release notes |
 
 Use Conventional Commits for all new commits and squash-merge titles. Historical commits are unchanged; automation starts from v1.0.2.
 
