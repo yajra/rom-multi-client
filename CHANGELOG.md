@@ -2,6 +2,14 @@
 
 Release Please maintains new entries from Conventional Commits. Versions follow Semantic Versioning. Historical releases below were recorded before automation.
 
+## [1.2.1](https://github.com/yajra/ROInstanceLauncher/compare/v1.2.0...v1.2.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **branding:** identify the launcher as Ragnarok M Eternal Love ([b6f2583](https://github.com/yajra/ROInstanceLauncher/commit/b6f2583c7e0703e8de9748e96ed40b1a4f53f9b9))
+* **branding:** set the Windows executable display name ([03232b4](https://github.com/yajra/ROInstanceLauncher/commit/03232b4964ccc367071e482afbf88073e3a9cc6a))
+
 ## [1.2.0](https://github.com/yajra/ROInstanceLauncher/compare/v1.1.0...v1.2.0) (2026-09-19)
 
 
