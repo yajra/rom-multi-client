@@ -2,6 +2,12 @@
 
 A standalone Windows desktop app for managing multiple Ragnarok M game windows from one shared installation. This project is independent of RO Codex and its Laravel repository.
 
+## Download
+
+Open the [latest GitHub release](https://github.com/yajra/ROInstanceLauncher/releases/latest) and download **RO-Instance-Launcher-VERSION-win-x64.exe**. It is a single executable for Windows x64 with the .NET runtime included: no installer or separate runtime installation is needed. Put it in a permanent folder and double-click it. Saved profiles stay in your local app-data folder when replacing the EXE with a newer release.
+
+Releases include `SHA256SUMS.txt` for verifying the download with PowerShell's `Get-FileHash -Algorithm SHA256`. The executable is currently unsigned, so Windows may show a publisher/SmartScreen prompt. This repository is private; downloading requires an account with repository access.
+
 ## Features
 
 - Detect existing instances and launch, show, or request a normal close.
@@ -16,7 +22,7 @@ A standalone Windows desktop app for managing multiple Ragnarok M game windows f
 ## Requirements
 
 - Windows 10 or 11.
-- .NET 8 SDK to build, or .NET 8 Windows Desktop Runtime to run the published app.
+- .NET 8 SDK to build. The development build requires the .NET 8 Windows Desktop Runtime; the downloadable release includes it.
 - An existing Ragnarok M installation containing `ro_win.exe` and `ro_win_Data`.
 - Write access to the game directory when preparing an instance or refreshing its executable after an update.
 
@@ -45,6 +51,28 @@ To also point existing `Ragnarok M - Instance N` desktop shortcuts at this app:
 ```
 
 Previous instance shortcuts are backed up outside the repository. Moving the project requires rebuilding and recreating its shortcuts.
+
+## GitHub builds and releases
+
+The **Windows build and release** workflow builds and tests a self-contained Windows x64 executable on every push to `main`, pull request to `main`, and manual workflow run. Download the build from the run's **Artifacts** section. Build artifacts are retained for 14 days.
+
+Pushing a version tag also publishes a GitHub Release with the tested EXE, README, and SHA-256 checksum. The tag must match `<Version>` in `src/ROInstances.csproj`:
+
+```powershell
+# First update the project Version, commit it, and push main.
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+The workflow publishes releases using GitHub's built-in token; no personal access token or extra secret is required. A failed build or test prevents publication. Tags identify immutable release versions; use a new version for subsequent releases.
+
+To produce and test the same single-file download locally:
+
+```powershell
+.\Build-Release.ps1
+```
+
+Output is in `artifacts\dist`. The development build and currently running launcher are not replaced by this command.
 
 ## Using the app
 

@@ -1,0 +1,77 @@
+name: Windows build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build, test, and package standalone executable
+        run: ./Build-Release.ps1
+      - name: Upload downloadable build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RO-Instance-Launcher-win-x64
+          path: artifacts/dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve test report
+        if: always()
+        shell: pwsh
+        run: |
+          $report = Join-Path $env:LOCALAPPDATA 'ROInstanceLaunchers\self-test.txt'
+          if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY }
+
+  release:
+    name: Publish versioned download
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested release files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: RO-Instance-Launcher-win-x64
+          path: dist
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notes = @'
+          Download the Windows x64 EXE below and double-click it. The .NET runtime is included; no installer or separate runtime is needed.
+
+          Includes account profile labels, instance controls, distinct window titles, resource monitoring, and optional Sandboxie launch support. Account labels do not isolate logins; Sandboxie compatibility is not yet verified.
+
+          Saved profiles remain in your local app-data folder. No game files or personal account data are included. The executable is unsigned. SHA256SUMS.txt contains its verification hash.
+          '@
+          Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
+          $assets = @(Get-ChildItem -LiteralPath dist -File | ForEach-Object { $_.FullName })
+          gh release create $env:GITHUB_REF_NAME @assets --repo $env:GITHUB_REPOSITORY --verify-tag --title "RO Instance Launcher $env:GITHUB_REF_NAME" --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed.' }
