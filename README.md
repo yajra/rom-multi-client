@@ -88,7 +88,9 @@ Closing the app window hides it in the notification area. Double-click its icon 
 
 The application does not capture passwords, export registry credentials, or copy login tokens. Actual separate remembered logins require separate storage. Optional Sandboxie Plus support uses the documented `Start.exe /box:NAME game.exe` command. It does not install Sandboxie or alter its configuration.
 
-To experiment with isolation, follow **Account setup** in the app. Create a different persistent sandbox for each profile, turn off automatic sandbox deletion, close the corresponding existing game, select Separate login, and sign in through the game yourself. Verify that login persists after closing and reopening before relying on it. Game/Sandboxie compatibility has not been validated, and game sessions may expire normally.
+**Compatibility result:** the 2026-09-19 test with Sandboxie Plus 1.18.4 reached game startup, then failed with **THEMIS Error 1000-1: Can't run in virtual machine environment!** Use Shared login for the tested client. Separate login persistence is not working in this configuration. See the [integration trial](docs/Sandboxie-compatibility.md).
+
+For a future client confirmed compatible by the publisher, follow **Account setup** in the app. Create a different persistent sandbox for each profile, turn off automatic sandbox deletion, close the corresponding existing game, select Separate login, and sign in through the game yourself. Verify that login persists after closing and reopening before relying on it. Game sessions may expire normally.
 
 - [Sandboxie Plus official downloads](https://sandboxie-plus.com/downloads/)
 - [Sandboxie command-line reference](https://sandboxie-plus.github.io/sandboxie-docs/Content/StartCommandLine/)
