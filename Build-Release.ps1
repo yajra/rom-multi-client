@@ -20,7 +20,7 @@ if ($LASTEXITCODE -ne 0) { throw "Release build failed with exit code $LASTEXITC
 $publishedExe = Join-Path $publishPath 'RO Instance Launcher.exe'
 & (Join-Path $PSScriptRoot 'Test.ps1') -SkipBuild -AppPath $publishedExe
 New-Item -ItemType Directory -Path $distPath -Force | Out-Null
-$assetName = "RO-Instance-Launcher-$version-win-x64.exe"
+$assetName = "RO-Eternal-Love-Launcher-$version-win-x64.exe"
 $assetPath = Join-Path $distPath $assetName
 Copy-Item -LiteralPath $publishedExe -Destination $assetPath -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $distPath 'README.md') -Force

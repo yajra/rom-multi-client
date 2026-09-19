@@ -1,10 +1,10 @@
-# RO Instance Launcher
+# RO Eternal Love Launcher
 
-A standalone Windows desktop app for managing multiple Ragnarok M game windows from one shared installation. This project is independent of RO Codex and its Laravel repository.
+A Windows multi-instance launcher for **Ragnarok M: Eternal Love**. Launch your game windows, organize character profiles, and monitor resources while sharing one Eternal Love installation.
 
 ## Download
 
-Open the [latest GitHub release](https://github.com/yajra/ROInstanceLauncher/releases/latest) and download **RO-Instance-Launcher-VERSION-win-x64.exe**. It is a single executable for Windows x64 with the .NET runtime included: no installer or separate runtime installation is needed. Put it in a permanent folder and double-click it. Saved profiles stay in your local app-data folder when replacing the EXE with a newer release.
+Open the [latest GitHub release](https://github.com/yajra/ROInstanceLauncher/releases/latest) and download **RO-Eternal-Love-Launcher-VERSION-win-x64.exe**. It is a single executable for Windows x64 with the .NET runtime included: no installer or separate runtime installation is needed. Put it in a permanent folder and double-click it. Saved profiles stay in your local app-data folder when replacing the EXE with a newer release.
 
 Releases include `SHA256SUMS.txt` for verifying the download with PowerShell's `Get-FileHash -Algorithm SHA256`. The executable is currently unsigned, so Windows may show a publisher/SmartScreen prompt. This repository is private; downloading requires an account with repository access.
 
@@ -22,7 +22,7 @@ Releases include `SHA256SUMS.txt` for verifying the download with PowerShell's `
 
 - Windows 10 or 11.
 - .NET 8 SDK to build. The development build requires the .NET 8 Windows Desktop Runtime; the downloadable release includes it.
-- An existing Ragnarok M installation containing `ro_win.exe` and `ro_win_Data`.
+- An existing Ragnarok M: Eternal Love installation containing `ro_win.exe` and `ro_win_Data`.
 - Write access to the game directory when preparing an instance or refreshing its executable after an update.
 
 ## Build, test, and run
@@ -43,7 +43,7 @@ Create a desktop shortcut with:
 .\Install-Shortcuts.ps1
 ```
 
-To also point existing `Ragnarok M - Instance N` desktop shortcuts at this app:
+To update existing instance shortcuts with Eternal Love names and the client icon:
 
 ```powershell
 .\Install-Shortcuts.ps1 -UpdateExistingInstances
@@ -82,7 +82,7 @@ Output is in `artifacts\dist`. The development build and currently running launc
 
 ## Using the app
 
-Open **RO Instance Launcher** from the desktop. Use **Edit** to name each account, **Launch** to start it, **Show** to bring its window forward, and **Close** to request a normal game exit. **Add instance** saves a new profile without immediately starting another game. The application supports up to 12 profiles; available hardware determines how many can run well.
+Open **RO Eternal Love Launcher** from the desktop. Use **Edit** to name each account, **Launch** to start it, **Show** to bring its window forward, and **Close** to request a normal game exit. **Add instance** saves a new profile without immediately starting another game. The application supports up to 12 profiles; available hardware determines how many can run well.
 
 Check the instances you want, or use **Check all**, then click **Launch selected**. Clicking Check all again clears the selection. The launcher starts the selected instances in number order with a short pause between them and skips games already running or starting. A failed launch or declined memory warning stops the remaining queue. Selection changes during a launch apply to the next batch. Selections remain while the launcher is open and reset when it exits.
 
@@ -124,3 +124,7 @@ Optional layout previews:
 ```
 
 Instance shortcuts call `--launch N`. If the launcher is already running, a current-user named pipe forwards the request to it. If that game is already running, the launcher brings it forward instead of starting a duplicate.
+
+## Branding
+
+The launcher uses the icon embedded in the installed Ragnarok M: Eternal Love client, including its original 16–256 pixel sizes. This is a community launcher utility. The game name and client artwork belong to their respective owners. Executable filenames and the saved-profile location remain compatible with earlier releases.

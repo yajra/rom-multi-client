@@ -18,6 +18,28 @@ using Forms = System.Windows.Forms;
 
 namespace ROInstances;
 
+public static class Branding
+{
+    public const string AppName = "RO Eternal Love Launcher";
+    public const string GameName = "Ragnarok M: Eternal Love";
+    public static readonly BitmapFrame Icon = LoadIcon();
+    static Stream OpenIcon() => typeof(Branding).Assembly.GetManifestResourceStream("EternalLove.ico")
+        ?? throw new InvalidOperationException("The Eternal Love icon is missing.");
+    static BitmapFrame LoadIcon()
+    {
+        using var stream = OpenIcon();
+        var icon = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+        icon.Freeze();
+        return icon;
+    }
+    public static System.Drawing.Icon CreateTrayIcon()
+    {
+        using var stream = OpenIcon();
+        using var icon = new System.Drawing.Icon(stream, 32, 32);
+        return (System.Drawing.Icon)icon.Clone();
+    }
+}
+
 public sealed class Profile
 {
     public int Slot { get; set; }
@@ -25,7 +47,7 @@ public sealed class Profile
     public string Account { get; set; } = "";
     public string Server { get; set; } = "";
     public string ProcessName => Slot == 1 ? "ro_win" : "ro_win" + (Slot - 1);
-    public string Title => $"Ragnarok M - Instance {Slot}" + (string.IsNullOrWhiteSpace(Name) ? "" : " | " + Name);
+    public string Title => $"{Branding.GameName} - Instance {Slot}" + (string.IsNullOrWhiteSpace(Name) ? "" : " | " + Name);
 }
 
 public sealed class Settings
@@ -106,7 +128,7 @@ public static class Game
         var root = Path.GetFullPath(folder);
         var original = Path.Combine(root, "ro_win.exe");
         var shared = Path.Combine(root, "ro_win_Data");
-        if (!File.Exists(original) || !Directory.Exists(shared)) throw new IOException("Choose the game folder containing ro_win.exe and ro_win_Data.");
+        if (!File.Exists(original) || !Directory.Exists(shared)) throw new IOException("Choose your Ragnarok M: Eternal Love folder containing ro_win.exe and ro_win_Data.");
         if (profile.Slot == 1) return;
         var executable = Path.Combine(root, profile.ProcessName + ".exe");
         var data = Path.Combine(root, profile.ProcessName + "_Data");
@@ -148,11 +170,11 @@ public static class Program
         if (!created && !preview)
         {
             try { using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.Out); pipe.Connect(2500); using var writer = new StreamWriter(pipe); writer.WriteLine(launchSlot); }
-            catch { MessageBox.Show("The launcher is already starting. Open it from the notification area in a moment.", "RO Instance Launcher"); }
+            catch { MessageBox.Show("The launcher is already starting. Open it from the notification area in a moment.", Branding.AppName); }
             return 0;
         }
         var app = new System.Windows.Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-        app.DispatcherUnhandledException += (_, e) => { MessageBox.Show(e.Exception.Message, "RO Instance Launcher"); e.Handled = true; };
+        app.DispatcherUnhandledException += (_, e) => { MessageBox.Show(e.Exception.Message, Branding.AppName); e.Handled = true; };
         try
         {
             var window = new LauncherWindow(preview);
@@ -192,7 +214,7 @@ public static class Program
             window.Show();
             app.Run();
         }
-        catch (Exception e) { MessageBox.Show(e.Message + "\n\nYour saved profiles have not been replaced.", "RO Instance Launcher"); return 1; }
+        catch (Exception e) { MessageBox.Show(e.Message + "\n\nYour saved profiles have not been replaced.", Branding.AppName); return 1; }
         return 0;
     }
 }
@@ -219,6 +241,7 @@ public sealed class LauncherWindow : Window
     bool updatingSelection;
     readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(2) };
     Forms.NotifyIcon? tray;
+    System.Drawing.Icon? trayIcon;
     public bool AllowExit;
     static SolidColorBrush Brush(string hex) => new((Color)ColorConverter.ConvertFromString(hex));
     public static TextBlock Text(string text, double size = 14, string color = "#E9EFFA") => new() { Text = text, FontSize = size, Foreground = Brush(color), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
@@ -234,7 +257,7 @@ public sealed class LauncherWindow : Window
         settings = isPreview && previewSettings != null ? previewSettings : Store.Load();
         launchSelected = Button("Launch selected", () => { _ = LaunchSelected(); }, true);
         if (!preview) Store.Save(settings);
-        Title = "RO Instance Launcher"; Width = 1100; Height = 820; MinWidth = 950; MinHeight = 640;
+        Title = Branding.AppName; Icon = Branding.Icon; Width = 1100; Height = 820; MinWidth = 950; MinHeight = 640;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Brush("#0D1626"); FontFamily = new FontFamily("Segoe UI");
         var shell = new Grid { Margin = new Thickness(30,24,30,20) };
@@ -248,10 +271,12 @@ public sealed class LauncherWindow : Window
         headerButtons.Children.Add(Button("Game folder", ChooseFolder));
         headerButtons.Children.Add(Button("+ Add instance", AddProfile, true));
         DockPanel.SetDock(headerButtons, Dock.Right); header.Children.Add(headerButtons);
+        var brand = new StackPanel { Orientation = Orientation.Horizontal };
+        brand.Children.Add(new System.Windows.Controls.Image { Source = Branding.Icon, Width = 64, Height = 64, Margin = new Thickness(0,0,16,0), VerticalAlignment = VerticalAlignment.Center, ToolTip = Branding.GameName });
         var heading = new StackPanel();
-        heading.Children.Add(Text("RO  /  MULTI-INSTANCE", 11, "#8BE6CB"));
-        var title = Text("Your adventuring party", 28); title.FontWeight = FontWeights.SemiBold; title.Margin = new Thickness(0,6,0,3); heading.Children.Add(title);
-        heading.Children.Add(Text("One installation. A clear home for every account.", 13, "#AAB6CC")); header.Children.Add(heading);
+        heading.Children.Add(Text("ETERNAL LOVE  /  MULTI-INSTANCE LAUNCHER", 10, "#8BE6CB"));
+        var title = Text(Branding.GameName, 25); title.FontWeight = FontWeights.SemiBold; title.Margin = new Thickness(0,6,0,3); heading.Children.Add(title);
+        heading.Children.Add(Text("Launch and manage your Eternal Love game windows.", 12, "#AAB6CC")); brand.Children.Add(heading); header.Children.Add(brand);
         shell.Children.Add(header);
         var metrics = new UniformGridCompat(4) { Margin = new Thickness(0,0,0,20) };
         foreach (var item in new[] { ("RUNNING", countValue), ("CPU LOAD", cpuValue), ("AVAILABLE RAM", ramValue), ("MEMORY HEADROOM", commitValue) })
@@ -268,20 +293,21 @@ public sealed class LauncherWindow : Window
         var scroll = new ScrollViewer { Content = cards, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0,0,8,0) }; Grid.SetRow(scroll,3); shell.Children.Add(scroll);
         var footer = new StackPanel { Margin = new Thickness(0,14,0,0) };
         feedback.Margin = new Thickness(0,0,0,8); footer.Children.Add(feedback);
-        footer.Children.Add(Text("Account labels identify your windows. Sign in through the game; all instances share its remembered login.", 11, "#8D9DB7"));
+        footer.Children.Add(Text("Profile labels identify your Eternal Love windows. Sign in through the game; remembered login is shared.", 11, "#8D9DB7"));
         footer.Children.Add(Text("Closing this window keeps the launcher in the notification area while it manages your titles.", 11, "#8D9DB7"));
         Grid.SetRow(footer,4); shell.Children.Add(footer); Content = shell;
         RenderCards(); Refresh();
         if (!preview)
         {
-            tray = new Forms.NotifyIcon { Icon = System.Drawing.SystemIcons.Application, Text = "RO Instance Launcher", Visible = true };
+            trayIcon = Branding.CreateTrayIcon();
+            tray = new Forms.NotifyIcon { Icon = trayIcon, Text = Branding.AppName, Visible = true };
             var menu = new Forms.ContextMenuStrip();
-            menu.Items.Add("Open launcher", null, (_, _) => Dispatcher.Invoke(Reveal));
+            menu.Items.Add("Open Eternal Love launcher", null, (_, _) => Dispatcher.Invoke(Reveal));
             menu.Items.Add("Exit launcher (leave games running)", null, (_, _) => Dispatcher.Invoke(() => { AllowExit = true; Close(); System.Windows.Application.Current.Shutdown(); }));
             tray.ContextMenuStrip = menu; tray.DoubleClick += (_, _) => Dispatcher.Invoke(Reveal);
             timer.Tick += (_, _) => Refresh(); timer.Start();
         }
-        Closing += (_, e) => { if (!AllowExit) { e.Cancel = true; Hide(); } else { timer.Stop(); tray?.Dispose(); } };
+        Closing += (_, e) => { if (!AllowExit) { e.Cancel = true; Hide(); } else { timer.Stop(); tray?.Dispose(); trayIcon?.Dispose(); } };
     }
     public void Reveal() { Show(); WindowState = WindowState.Normal; Activate(); }
     void Say(string message, bool error = false) { feedback.Text = message; feedback.Foreground = Brush(error ? "#FFB4A6" : "#AAB6CC"); }
@@ -432,7 +458,7 @@ public sealed class LauncherWindow : Window
         try
         {
             var usage = Native.ReadUsage().Memory;
-            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another RO instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return false;
+            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another Eternal Love instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return false;
             var start = Game.StartInfo(profile,settings.GameFolder);
             await Task.Run(() => Game.EnsureFiles(profile,settings.GameFolder));
             var process = Process.Start(start) ?? throw new IOException("Windows could not start this instance.");
@@ -474,7 +500,7 @@ public sealed class LauncherWindow : Window
     }
     void ChooseFolder()
     {
-        var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Select the folder containing ro_win.exe", InitialDirectory = settings.GameFolder };
+        var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Select your Ragnarok M: Eternal Love game folder", InitialDirectory = settings.GameFolder };
         if (picker.ShowDialog(this) != true) return;
         if (!File.Exists(Path.Combine(picker.FolderName,"ro_win.exe")) || !Directory.Exists(Path.Combine(picker.FolderName,"ro_win_Data"))) { Say("That folder must contain ro_win.exe and ro_win_Data.",true); return; }
         var previous = settings.GameFolder; settings.GameFolder = picker.FolderName;
@@ -489,7 +515,7 @@ public sealed class ProfileEditor : Window
 {
     public ProfileEditor(Profile profile)
     {
-        Title = "Edit Instance " + profile.Slot; Width = 520; Height = 490; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Title = "Eternal Love · Edit Instance " + profile.Slot; Icon = Branding.Icon; Width = 520; Height = 490; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(13,22,38)); FontFamily = new FontFamily("Segoe UI");
         var panel = new StackPanel { Margin = new Thickness(28) };
         panel.Children.Add(LauncherWindow.Text("Instance " + profile.Slot,24));
@@ -524,7 +550,7 @@ public static class SelfTest
             Store.Validate(settings);
             Check(settings.Profiles[0].ProcessName == "ro_win" && settings.Profiles[3].ProcessName == "ro_win3","instance-to-executable mapping");
             settings.Profiles[0].Name = "Main account";
-            Check(settings.Profiles[0].Title == "Ragnarok M - Instance 1 | Main account","account window title");
+            Check(settings.Profiles[0].Title == "Ragnarok M: Eternal Love - Instance 1 | Main account","account window title");
             var copy = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))!;
             Store.Validate(copy); Check(copy.Profiles[0].Name == "Main account","profile JSON round-trip");
             copy.Profiles[1].Slot = 1;

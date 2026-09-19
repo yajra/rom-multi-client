@@ -7,6 +7,13 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>RO Instance Launcher</AssemblyName>
+    <Title>RO Eternal Love Launcher</Title>
+    <Product>RO Eternal Love Launcher</Product>
+    <Description>Multi-instance launcher for Ragnarok M: Eternal Love.</Description>
+    <ApplicationIcon>Assets\EternalLove.ico</ApplicationIcon>
     <Version>1.2.0</Version>
   </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\EternalLove.ico" LogicalName="EternalLove.ico" />
+  </ItemGroup>
 </Project>
