@@ -11,9 +11,9 @@
     <Product>RO Eternal Love Launcher</Product>
     <Description>Multi-instance launcher for Ragnarok M: Eternal Love.</Description>
     <ApplicationIcon>Assets\EternalLove.ico</ApplicationIcon>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Assets\EternalLove.ico" LogicalName="EternalLove.ico" />
+    <EmbeddedResource Include="Assets\EternalLove.ico" LogicalName="EternalLove.ico"/>
   </ItemGroup>
 </Project>
