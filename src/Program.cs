@@ -316,8 +316,8 @@ public sealed class LauncherWindow : Window
             row.Status.Text = processes.Count > 0 ? "● Running" : isPending || starting.Contains(profile.Slot) ? "Starting…" : "○ Stopped";
             row.Status.Foreground = Brush(processes.Count > 0 ? "#8BE6CB" : "#AAB6CC");
             row.Usage.Text = processes.Count > 0 ? $"{processes.Sum(p => SafeWorkingSet(p)) / 1073741824.0:F1} GB in RAM" : isPending ? "Waiting for window" : "Ready to launch";
-            row.Launch.IsEnabled = processes.Count == 0 && !isPending && !starting.Contains(profile.Slot);
-            row.Focus.IsEnabled = processes.Count > 0; row.Stop.IsEnabled = processes.Count > 0;
+            row.Launch.Visibility = processes.Count == 0 && !isPending && !starting.Contains(profile.Slot) ? Visibility.Visible : Visibility.Collapsed;
+            row.Focus.Visibility = row.Stop.Visibility = processes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var process in processes)
             {
                 try { if (!preview && process.MainWindowHandle != IntPtr.Zero && process.MainWindowTitle != profile.Title) Native.SetWindowText(process.MainWindowHandle,profile.Title); } catch { }
