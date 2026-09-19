@@ -55,15 +55,22 @@ Previous instance shortcuts are backed up outside the repository. Moving the pro
 
 The **Windows build and release** workflow builds and tests a self-contained Windows x64 executable on every push to `main`, pull request to `main`, and manual workflow run. Download the build from the run's **Artifacts** section. Build artifacts are retained for 14 days.
 
-Pushing a version tag also publishes a GitHub Release with the tested EXE, README, and SHA-256 checksum. The tag must match `<Version>` in `src/ROInstances.csproj`:
+[Release Please](https://github.com/googleapis/release-please-action) reads Conventional Commits after a successful main build and opens or updates a release PR. It updates [CHANGELOG.md](CHANGELOG.md), version.txt, the release manifest, and the C# project version together.
 
-```powershell
-# First update the project Version, commit it, and push main.
-git tag v1.0.2
-git push origin v1.0.2
-```
+| Commit | SemVer change |
+| --- | --- |
+| fix: correct a problem | Patch |
+| feat: add a capability | Minor |
+| feat!: change compatibility, or a BREAKING CHANGE: footer | Major |
+| docs:, test:, ci:, refactor:, chore: | No release on their own; included in the next release notes |
 
-The workflow publishes releases using GitHub's built-in token; no personal access token or extra secret is required. A failed build or test prevents publication. Tags identify immutable release versions; use a new version for subsequent releases.
+Use Conventional Commits for all new commits and squash-merge titles. Historical commits are unchanged; automation starts from v1.0.2.
+
+Review and merge the release PR when ready. The merged main build tests the new version. The same workflow then creates a draft release, attaches the tested EXE, README, changelog, and checksum, and publishes it. Failed builds prevent release creation; failed uploads leave a draft. No manual version bump or tag is needed.
+
+The workflow uses GitHub's built-in token, job-scoped write permissions, and the repository's **Allow GitHub Actions to create and approve pull requests** setting. It does not auto-approve or auto-merge PRs. Bot-created PRs do not trigger other workflows with that token; run **Windows build and release** manually on the release PR branch to validate it before merging. The merged main commit is always tested again before publication.
+
+If upload or publication fails after a draft is created, rerun the failed jobs in that original workflow run to reuse its release outputs and tested artifacts.
 
 To produce and test the same single-file download locally:
 

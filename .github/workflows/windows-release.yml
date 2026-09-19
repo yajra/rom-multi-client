@@ -3,13 +3,16 @@ name: Windows build and release
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -44,10 +47,31 @@ jobs:
           $report = Join-Path $env:LOCALAPPDATA 'ROInstanceLaunchers\self-test.txt'
           if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY }
 
-  release:
-    name: Publish versioned download
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  release-please:
+    name: Update changelog and semantic version
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Create or update release PR
+        id: release
+        uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  release:
+    name: Publish tested versioned download
+    if: needs.release-please.outputs.release_created == 'true'
+    needs: [build, release-please]
     runs-on: windows-latest
     timeout-minutes: 5
     permissions:
@@ -58,20 +82,19 @@ jobs:
         with:
           name: RO-Instance-Launcher-win-x64
           path: dist
-      - name: Publish GitHub Release
+      - name: Attach assets and publish draft release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $notes = @'
-          Download the Windows x64 EXE below and double-click it. The .NET runtime is included; no installer or separate runtime is needed.
-
-          Includes account profile labels, instance controls, distinct window titles, resource monitoring, and normal game launching. Saved labels identify windows; all instances share the game's remembered login.
-
-          Saved profiles remain in your local app-data folder. No game files or personal account data are included. The executable is unsigned. SHA256SUMS.txt contains its verification hash.
-          '@
-          Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
+          $version = $env:RELEASE_TAG -replace '^v', ''
+          if (!(Test-Path -LiteralPath "dist/RO-Instance-Launcher-$version-win-x64.exe")) {
+            throw 'Release tag does not match the tested executable.'
+          }
           $assets = @(Get-ChildItem -LiteralPath dist -File | ForEach-Object { $_.FullName })
-          gh release create $env:GITHUB_REF_NAME @assets --repo $env:GITHUB_REPOSITORY --verify-tag --title "RO Instance Launcher $env:GITHUB_REF_NAME" --notes-file release-notes.md
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed.' }
+          gh release upload $env:RELEASE_TAG @assets --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed; release remains a draft.' }
+          gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
