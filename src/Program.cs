@@ -55,8 +55,7 @@ public static class Store
             throw new InvalidDataException("Profiles must have unique instance numbers from 1 to 12.");
         if (settings.Profiles.Any(p => p.Name == null || p.Account == null || p.Server == null || p.Sandbox == null))
             throw new InvalidDataException("A profile contains an invalid empty field.");
-        if (settings.Profiles.Any(p => p.Isolated && !Regex.IsMatch(p.Sandbox, @"^[A-Za-z][A-Za-z0-9_]{0,31}$")))
-            throw new InvalidDataException("Use letters, numbers and underscores for sandbox names, starting with a letter.");
+        foreach (var profile in settings.Profiles.Where(p => p.Isolated)) Sandboxie.ValidateName(profile.Sandbox);
         var boxes = settings.Profiles.Where(p => p.Isolated).Select(p => p.Sandbox).ToArray();
         if (boxes.Distinct(StringComparer.OrdinalIgnoreCase).Count() != boxes.Length)
             throw new InvalidDataException("Use a different sandbox for each account.");
@@ -156,6 +155,18 @@ public static class Program
     [STAThread] public static int Main(string[] args)
     {
         if (args.Contains("--self-test")) return SelfTest.Run();
+        if (args.Length == 2 && args[0] == "--prepare-sandbox")
+        {
+            Directory.CreateDirectory(Store.Root);
+            try
+            {
+                var start = Game.SandboxiePath ?? throw new IOException("Sandboxie is not installed.");
+                var sandboxCreated = Sandboxie.EnsureAsync(args[1], start).GetAwaiter().GetResult();
+                File.WriteAllText(Path.Combine(Store.Root,"sandbox-setup.txt"), $"{args[1]}: " + (sandboxCreated ? "created with persistent storage." : "existing persistent sandbox verified."));
+                return 0;
+            }
+            catch (Exception error) { File.WriteAllText(Path.Combine(Store.Root,"sandbox-setup.txt"),error.Message); return 1; }
+        }
         var preview = args.Length == 2 && (args[0] == "--preview" || args[0] == "--preview-editor");
         var launchSlot = args.Length == 2 && args[0] == "--launch" && int.TryParse(args[1], out var slot) && slot >= 1 && slot <= 12 ? slot : 0;
         using var single = new Mutex(true, "Local\\" + PipeName, out var created);
@@ -197,7 +208,12 @@ public static class Program
                     catch { await Task.Delay(1000); }
                 }
             });
-            if (launchSlot > 0) window.Loaded += async (_, _) => await window.Launch(launchSlot);
+            if (launchSlot > 0)
+            {
+                EventHandler? launchOnce = null;
+                launchOnce = (_, _) => { window.ContentRendered -= launchOnce; _ = window.Dispatcher.BeginInvoke(new Action(() => { _ = window.Launch(launchSlot); }), DispatcherPriority.ApplicationIdle); };
+                window.ContentRendered += launchOnce;
+            }
             window.Show();
             app.Run();
         }
@@ -351,6 +367,11 @@ public sealed class LauncherWindow : Window
             var usage = Native.ReadUsage().Memory;
             if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another RO instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             var start = Game.StartInfo(profile,settings.GameFolder);
+            if (profile.Isolated)
+            {
+                Say($"Preparing sandbox {profile.Sandbox}…");
+                await Sandboxie.EnsureAsync(profile.Sandbox, start.FileName);
+            }
             await Task.Run(() => Game.EnsureFiles(profile,settings.GameFolder));
             var process = Process.Start(start) ?? throw new IOException("Windows could not start this instance.");
             pending[slot] = DateTime.UtcNow;
@@ -358,7 +379,7 @@ public sealed class LauncherWindow : Window
             if (profile.Isolated)
             {
                 var completed = await Task.WhenAny(process.WaitForExitAsync(),Task.Delay(3000));
-                if (completed.IsCompleted && process.HasExited && process.ExitCode != 0) { pending.Remove(slot); throw new IOException($"Sandboxie could not start {profile.Sandbox} (exit {process.ExitCode}). Create that sandbox in Sandboxie Plus first."); }
+                if (completed.IsCompleted && process.HasExited && process.ExitCode != 0) { pending.Remove(slot); throw new IOException($"Sandboxie could not launch the game in {profile.Sandbox} (exit {process.ExitCode}). The sandbox was configured; check Sandboxie's message for the launch failure."); }
             }
             process.Dispose();
         }
@@ -407,9 +428,9 @@ public sealed class LauncherWindow : Window
         var stack = new StackPanel { Margin = new Thickness(28) };
         stack.Children.Add(Text("Keep each account in its own sandbox",22));
         var description = Text("Account labels help identify windows. They do not save a login session. Shared login mode continues to use the game's last account.",14,"#AAB6CC"); description.Margin = new Thickness(0,15,0,20); stack.Children.Add(description);
-        foreach (var line in new[] { "1. Install Sandboxie Plus from its official website.", "2. Create a standard sandbox for each account: RO1, RO2, RO3 and RO4. Keep automatic deletion OFF.", "3. Close the corresponding game window. Edit its profile here, select Separate login, and enter that sandbox name.", "4. Launch and log in through the game. Close and reopen it to test that the account is remembered. Repeat for each profile." })
+        foreach (var line in new[] { "1. Install Sandboxie Plus from its official website.", "2. Close the corresponding game window. Edit its profile here and select Separate login. Use a different sandbox name per account.", "3. Launch. The app creates a missing sandbox with persistent storage automatically. Existing sandbox settings are preserved.", "4. If the game supports sandboxing, sign in through the game, then close and reopen it to test account persistence." })
         { var text = Text(line,14); text.Margin = new Thickness(0,0,0,14); stack.Children.Add(text); }
-        stack.Children.Add(Text("Game compatibility must be tested. The launcher does not capture passwords or copy login tokens. Sandbox contents must be kept to preserve logins; sessions can still expire.",12,"#EBCB8B"));
+        stack.Children.Add(Text("The tested RO client rejects Sandboxie with THEMIS Error 1000-1. Automatic setup does not resolve that game restriction. The launcher does not capture passwords or copy login tokens.",12,"#EBCB8B"));
         var buttons = new WrapPanel { Margin = new Thickness(0,22,0,0) };
         buttons.Children.Add(Button("Official download", () => Process.Start(new ProcessStartInfo("https://sandboxie-plus.com/downloads/") { UseShellExecute = true }),true));
         buttons.Children.Add(Button("Open Sandboxie", () => { var path = Game.SandboxiePath; var manager = path == null ? null : Path.Combine(Path.GetDirectoryName(path)!,"SandMan.exe"); if (manager != null && File.Exists(manager)) Process.Start(new ProcessStartInfo(manager) { UseShellExecute = true }); else MessageBox.Show(dialog,"Sandboxie Plus is not installed in its default location."); }));
@@ -437,14 +458,14 @@ public sealed class ProfileEditor : Window
         var server = Field("Server / character note  ·  optional",profile.Server);
         var modeLabel = LauncherWindow.Text("Login storage",12,"#AAB6CC"); modeLabel.Margin = new Thickness(0,16,0,6); panel.Children.Add(modeLabel);
         var mode = new ComboBox { FontSize = 14, Padding = new Thickness(9), ItemsSource = new[] { "Shared login (normal launch)", "Separate login (Sandboxie Plus)" }, SelectedIndex = profile.Isolated ? 1 : 0 }; panel.Children.Add(mode);
-        var boxName = Field("Sandbox name  ·  create this in Sandboxie Plus first",profile.Sandbox);
+        var boxName = Field("Sandbox name  ·  created automatically when missing",profile.Sandbox);
         boxName.IsEnabled = profile.Isolated; mode.SelectionChanged += (_, _) => boxName.IsEnabled = mode.SelectedIndex == 1;
         var hint = LauncherWindow.Text("Labels are saved on this PC. Passwords are entered only in the game. Separate login requires Sandboxie and a restart of this instance.",12,"#AAB6CC"); hint.Margin = new Thickness(0,16,0,16); panel.Children.Add(hint);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(18,9,18,9), Margin = new Thickness(0,0,8,0), IsCancel = true }; buttons.Children.Add(cancel);
         var save = new Button { Content = "Save profile", Padding = new Thickness(18,9,18,9), IsDefault = true };
         save.Click += (_, _) => {
-            if (mode.SelectedIndex == 1 && !Regex.IsMatch(boxName.Text.Trim(),@"^[A-Za-z][A-Za-z0-9_]{0,31}$")) { MessageBox.Show(this,"Sandbox names must start with a letter and contain only letters, numbers or underscores (up to 32 characters)."); return; }
+            if (mode.SelectedIndex == 1) { try { Sandboxie.ValidateName(boxName.Text.Trim()); } catch (InvalidDataException error) { MessageBox.Show(this,error.Message); return; } }
             profile.Name = name.Text.Trim(); profile.Account = account.Text.Trim(); profile.Server = server.Text.Trim(); profile.Isolated = mode.SelectedIndex == 1; profile.Sandbox = boxName.Text.Trim(); DialogResult = true;
         };
         buttons.Children.Add(save); panel.Children.Add(buttons); Content = panel;
@@ -499,6 +520,7 @@ public static class SelfTest
                 cancelEditor.DialogResult = false;
             }));
             Check(cancelEditor.ShowDialog() == false && cancelled.Name == "Original", "profile editor cancellation preserves values");
+            SandboxieTests.Run(Check);
             Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 0;
         }
         catch (Exception e) { report.Add(e.ToString()); Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 1; }
