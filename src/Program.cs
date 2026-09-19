@@ -210,6 +210,13 @@ public sealed class LauncherWindow : Window
     readonly Dictionary<int, (TextBlock Status, TextBlock Usage, Button Launch, Button Focus, Button Stop)> rows = new();
     readonly Dictionary<int, DateTime> pending = new();
     readonly HashSet<int> starting = new();
+    readonly HashSet<int> selected = new();
+    readonly Dictionary<int, CheckBox> selections = new();
+    readonly CheckBox checkAll = new() { Content = "Check all", Foreground = Brush("#E9EFFA"), VerticalAlignment = VerticalAlignment.Center, FontSize = 13 };
+    readonly TextBlock selectionCount = Text("Select instances to launch together", 12, "#AAB6CC");
+    readonly Button launchSelected;
+    bool batchLaunching;
+    bool updatingSelection;
     readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(2) };
     Forms.NotifyIcon? tray;
     public bool AllowExit;
@@ -221,10 +228,11 @@ public sealed class LauncherWindow : Window
         var button = new Button { Content = label, Padding = new Thickness(15,9,15,9), Margin = new Thickness(5,0,0,0), Background = Brush(primary ? "#8BE6CB" : "#26364F"), Foreground = Brush(primary ? "#102923" : "#F0F5FF"), BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand, FontSize = 13, MinHeight = 36 };
         button.Click += (_, _) => action(); return button;
     }
-    public LauncherWindow(bool isPreview)
+    public LauncherWindow(bool isPreview, Settings? previewSettings = null)
     {
         preview = isPreview;
-        settings = Store.Load();
+        settings = isPreview && previewSettings != null ? previewSettings : Store.Load();
+        launchSelected = Button("Launch selected", () => { _ = LaunchSelected(); }, true);
         if (!preview) Store.Save(settings);
         Title = "RO Instance Launcher"; Width = 1100; Height = 820; MinWidth = 950; MinHeight = 640;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -250,8 +258,12 @@ public sealed class LauncherWindow : Window
         { var stack = new StackPanel(); stack.Children.Add(Text(item.Item1, 10, "#AAB6CC")); item.Item2.Margin = new Thickness(0,7,0,0); stack.Children.Add(item.Item2); var panel = Panel(stack); panel.Margin = new Thickness(0,0,10,0); metrics.Children.Add(panel); }
         Grid.SetRow(metrics,1); shell.Children.Add(metrics);
         var intro = new DockPanel { Margin = new Thickness(0,0,0,12) };
-        var subtitle = Text("ACCOUNT PROFILES", 11, "#AAB6CC"); intro.Children.Add(subtitle);
-        var explain = Text("Edit a profile to save its name, account and server.", 12, "#AAB6CC"); explain.HorizontalAlignment = HorizontalAlignment.Right; intro.Children.Add(explain);
+        intro.MinHeight = 36;
+        DockPanel.SetDock(launchSelected, Dock.Right); intro.Children.Add(launchSelected);
+        checkAll.Margin = new Thickness(0,0,18,0);
+        checkAll.Click += (_, _) => SetAllSelected(selected.Count != settings.Profiles.Count);
+        DockPanel.SetDock(checkAll, Dock.Left); intro.Children.Add(checkAll);
+        intro.Children.Add(selectionCount);
         Grid.SetRow(intro,2); shell.Children.Add(intro);
         var scroll = new ScrollViewer { Content = cards, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0,0,8,0) }; Grid.SetRow(scroll,3); shell.Children.Add(scroll);
         var footer = new StackPanel { Margin = new Thickness(0,14,0,0) };
@@ -275,11 +287,19 @@ public sealed class LauncherWindow : Window
     void Say(string message, bool error = false) { feedback.Text = message; feedback.Foreground = Brush(error ? "#FFB4A6" : "#AAB6CC"); }
     void RenderCards()
     {
-        cards.Children.Clear(); rows.Clear();
+        cards.Children.Clear(); rows.Clear(); selections.Clear();
         foreach (var profile in settings.Profiles.OrderBy(p => p.Slot))
         {
             var row = new Grid(); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1,GridUnitType.Star) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(125) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var number = Text(profile.Slot.ToString("00"), 23, "#8BE6CB"); number.FontWeight = FontWeights.SemiBold; row.Children.Add(number);
+            row.ColumnDefinitions[0].Width = new GridLength(84);
+            var select = new CheckBox { IsChecked = selected.Contains(profile.Slot), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,12,0), ToolTip = "Select Instance " + profile.Slot };
+            System.Windows.Automation.AutomationProperties.SetName(select, "Select Instance " + profile.Slot);
+            select.Checked += (_, _) => Select(profile.Slot, true);
+            select.Unchecked += (_, _) => Select(profile.Slot, false);
+            selections[profile.Slot] = select;
+            var identifier = new StackPanel { Orientation = Orientation.Horizontal };
+            identifier.Children.Add(select);
+            var number = Text(profile.Slot.ToString("00"), 23, "#8BE6CB"); number.FontWeight = FontWeights.SemiBold; identifier.Children.Add(number); row.Children.Add(identifier);
             var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,12,0) };
             var name = Text(string.IsNullOrWhiteSpace(profile.Name) ? "Instance " + profile.Slot : profile.Name, 17); name.FontWeight = FontWeights.SemiBold; identity.Children.Add(name);
             var detail = string.IsNullOrWhiteSpace(profile.Account) ? "No account label yet" : profile.Account;
@@ -296,6 +316,79 @@ public sealed class LauncherWindow : Window
             rows[profile.Slot] = (status,usage,launch,focus,stop);
             var card = Panel(row); card.Margin = new Thickness(0,0,0,10); cards.Children.Add(card);
         }
+        UpdateSelection();
+    }
+    void Select(int slot, bool value)
+    {
+        if (value) selected.Add(slot); else selected.Remove(slot);
+        if (!updatingSelection) UpdateSelection();
+    }
+    void SetAllSelected(bool value)
+    {
+        updatingSelection = true;
+        try { foreach (var box in selections.Values) box.IsChecked = value; }
+        finally { updatingSelection = false; UpdateSelection(); }
+    }
+    void UpdateSelection()
+    {
+        checkAll.IsChecked = selected.Count == 0 ? false : selected.Count == settings.Profiles.Count ? true : null;
+        selectionCount.Text = selected.Count == 0 ? "Select instances to launch together" : $"{selected.Count} selected · running instances are skipped";
+        launchSelected.Content = $"Launch selected ({selected.Count})";
+        launchSelected.Visibility = selected.Count > 0 && !batchLaunching ? Visibility.Visible : Visibility.Collapsed;
+    }
+    async Task LaunchSelected(Func<int, Task<bool>>? launch = null, int delayMs = 2000)
+    {
+        if (batchLaunching || selected.Count == 0) return;
+        var slots = selected.OrderBy(slot => slot).ToArray();
+        batchLaunching = true; UpdateSelection(); Refresh();
+        try
+        {
+            for (var i = 0; i < slots.Length; i++)
+            {
+                Say($"Launching selection {i + 1} of {slots.Length} · Instance {slots[i]}…");
+                if (!await (launch?.Invoke(slots[i]) ?? Launch(slots[i], true)))
+                {
+                    Say($"Stopped the launch queue at Instance {slots[i]}. Remaining instances were not launched.", true);
+                    return;
+                }
+                if (i + 1 < slots.Length) await Task.Delay(delayMs);
+            }
+            Say($"Finished launching {slots.Length} selected instances. Already running instances were skipped.");
+        }
+        finally { batchLaunching = false; UpdateSelection(); Refresh(); }
+    }
+    internal static void TestSelection(Action<bool, string> check)
+    {
+        var window = new LauncherWindow(true, new Settings {
+            GameFolder = Path.Combine(Store.Root, "Tests", "NoGame"),
+            Profiles = Enumerable.Range(1, 3).Select(slot => new Profile { Slot = slot }).ToList()
+        });
+        try
+        {
+            check(window.launchSelected.Visibility == Visibility.Collapsed, "empty selection hides bulk launch");
+            window.selections[2].IsChecked = true;
+            check(window.selected.SetEquals(new[] { 2 }) && window.checkAll.IsChecked == null, "individual selection sets partial check-all state");
+            window.checkAll.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            check(window.selected.Count == 3 && window.checkAll.IsChecked == true, "check all selects every profile from partial selection");
+            window.RenderCards();
+            check(window.selections.Values.All(box => box.IsChecked == true), "selection survives profile card refresh");
+            window.checkAll.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            check(window.selected.Count == 0 && window.checkAll.IsChecked == false, "check all clears a complete selection");
+            window.selections[3].IsChecked = true;
+            window.selections[1].IsChecked = true;
+            var launched = new List<int>();
+            window.LaunchSelected(slot => {
+                check(window.launchSelected.Visibility == Visibility.Collapsed, "bulk action hidden while launching");
+                launched.Add(slot);
+                window.selections[2].IsChecked = true;
+                return Task.FromResult(true);
+            }, 0).GetAwaiter().GetResult();
+            check(launched.SequenceEqual(new[] { 1, 3 }), "batch uses ordered selection snapshot and excludes unchecked profiles");
+            launched.Clear();
+            window.LaunchSelected(slot => { launched.Add(slot); return Task.FromResult(false); }, 0).GetAwaiter().GetResult();
+            check(launched.SequenceEqual(new[] { 1 }) && !window.batchLaunching && window.launchSelected.Visibility == Visibility.Visible, "cancelled launch stops queue and restores controls");
+        }
+        finally { window.AllowExit = true; window.Close(); }
     }
     void Refresh()
     {
@@ -316,7 +409,7 @@ public sealed class LauncherWindow : Window
             row.Status.Text = processes.Count > 0 ? "● Running" : isPending || starting.Contains(profile.Slot) ? "Starting…" : "○ Stopped";
             row.Status.Foreground = Brush(processes.Count > 0 ? "#8BE6CB" : "#AAB6CC");
             row.Usage.Text = processes.Count > 0 ? $"{processes.Sum(p => SafeWorkingSet(p)) / 1073741824.0:F1} GB in RAM" : isPending ? "Waiting for window" : "Ready to launch";
-            row.Launch.Visibility = processes.Count == 0 && !isPending && !starting.Contains(profile.Slot) ? Visibility.Visible : Visibility.Collapsed;
+            row.Launch.Visibility = !batchLaunching && processes.Count == 0 && !isPending && !starting.Contains(profile.Slot) ? Visibility.Visible : Visibility.Collapsed;
             row.Focus.Visibility = row.Stop.Visibility = processes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var process in processes)
             {
@@ -327,26 +420,28 @@ public sealed class LauncherWindow : Window
         countValue.Text = $"{running} / {settings.Profiles.Count}";
     }
     static long SafeWorkingSet(Process p) { try { return p.WorkingSet64; } catch { return 0; } }
-    public async Task Launch(int slot)
+    public async Task<bool> Launch(int slot, bool fromBatch = false)
     {
+        if (batchLaunching && !fromBatch) return false;
         var profile = settings.Profiles.FirstOrDefault(p => p.Slot == slot);
-        if (profile == null) { Say("That instance is not in your saved profiles.",true); return; }
-        if (starting.Contains(slot) || pending.ContainsKey(slot)) return;
+        if (profile == null) { Say("That instance is not in your saved profiles.",true); return false; }
+        if (starting.Contains(slot) || pending.ContainsKey(slot)) return true;
         var existing = Game.Find(profile,settings.GameFolder);
-        if (existing.Count > 0) { existing.ForEach(p => p.Dispose()); Focus(profile); return; }
+        if (existing.Count > 0) { existing.ForEach(p => p.Dispose()); if (!fromBatch) Focus(profile); return true; }
         starting.Add(slot); Refresh();
         try
         {
             var usage = Native.ReadUsage().Memory;
-            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another RO instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another RO instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return false;
             var start = Game.StartInfo(profile,settings.GameFolder);
             await Task.Run(() => Game.EnsureFiles(profile,settings.GameFolder));
             var process = Process.Start(start) ?? throw new IOException("Windows could not start this instance.");
             pending[slot] = DateTime.UtcNow;
             Say($"Starting Instance {slot}.");
             process.Dispose();
+            return true;
         }
-        catch (Exception e) { Say(e.Message,true); MessageBox.Show(this,e.Message,"Could not launch",MessageBoxButton.OK,MessageBoxImage.Warning); }
+        catch (Exception e) { Say(e.Message,true); MessageBox.Show(this,e.Message,"Could not launch",MessageBoxButton.OK,MessageBoxImage.Warning); return false; }
         finally { starting.Remove(slot); Refresh(); }
     }
     void Focus(Profile profile)
@@ -467,6 +562,7 @@ public static class SelfTest
                 cancelEditor.DialogResult = false;
             }));
             Check(cancelEditor.ShowDialog() == false && cancelled.Name == "Original", "profile editor cancellation preserves values");
+            LauncherWindow.TestSelection(Check);
             Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 0;
         }
         catch (Exception e) { report.Add(e.ToString()); Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 1; }

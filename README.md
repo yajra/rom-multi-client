@@ -84,6 +84,8 @@ Output is in `artifacts\dist`. The development build and currently running launc
 
 Open **RO Instance Launcher** from the desktop. Use **Edit** to name each account, **Launch** to start it, **Show** to bring its window forward, and **Close** to request a normal game exit. **Add instance** saves a new profile without immediately starting another game. The application supports up to 12 profiles; available hardware determines how many can run well.
 
+Check the instances you want, or use **Check all**, then click **Launch selected**. Clicking Check all again clears the selection. The launcher starts the selected instances in number order with a short pause between them and skips games already running or starting. A failed launch or declined memory warning stops the remaining queue. Selection changes during a launch apply to the next batch. Selections remain while the launcher is open and reset when it exits.
+
 Use **Game folder** if your installation is elsewhere. The initial default is `C:\Program Files (x86)\XD\ROLauncher`. The original data folder stays shared. The launcher does not overwrite unrelated existing data directories.
 
 Closing the app window hides it in the notification area. Double-click its icon to reopen, or use **Exit launcher (leave games running)** to stop the app without closing games.
