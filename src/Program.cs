@@ -7,7 +7,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -25,8 +24,6 @@ public sealed class Profile
     public string Name { get; set; } = "";
     public string Account { get; set; } = "";
     public string Server { get; set; } = "";
-    public bool Isolated { get; set; }
-    public string Sandbox { get; set; } = "";
     public string ProcessName => Slot == 1 ? "ro_win" : "ro_win" + (Slot - 1);
     public string Title => $"Ragnarok M - Instance {Slot}" + (string.IsNullOrWhiteSpace(Name) ? "" : " | " + Name);
 }
@@ -44,7 +41,7 @@ public static class Store
     public static Settings Load(string? filePath = null)
     {
         var target = filePath ?? FilePath;
-        if (!File.Exists(target)) return new Settings { Profiles = Enumerable.Range(1,4).Select(i => new Profile { Slot = i, Sandbox = "RO" + i }).ToList() };
+        if (!File.Exists(target)) return new Settings { Profiles = Enumerable.Range(1,4).Select(i => new Profile { Slot = i }).ToList() };
         var value = JsonSerializer.Deserialize<Settings>(File.ReadAllText(target)) ?? throw new InvalidDataException("The profile file is empty.");
         Validate(value);
         return value;
@@ -53,12 +50,8 @@ public static class Store
     {
         if (settings.Profiles.Count == 0 || settings.Profiles.Any(p => p.Slot < 1 || p.Slot > 12) || settings.Profiles.Select(p => p.Slot).Distinct().Count() != settings.Profiles.Count)
             throw new InvalidDataException("Profiles must have unique instance numbers from 1 to 12.");
-        if (settings.Profiles.Any(p => p.Name == null || p.Account == null || p.Server == null || p.Sandbox == null))
+        if (settings.Profiles.Any(p => p.Name == null || p.Account == null || p.Server == null))
             throw new InvalidDataException("A profile contains an invalid empty field.");
-        foreach (var profile in settings.Profiles.Where(p => p.Isolated)) Sandboxie.ValidateName(profile.Sandbox);
-        var boxes = settings.Profiles.Where(p => p.Isolated).Select(p => p.Sandbox).ToArray();
-        if (boxes.Distinct(StringComparer.OrdinalIgnoreCase).Count() != boxes.Length)
-            throw new InvalidDataException("Use a different sandbox for each account.");
         if (!Path.IsPathFullyQualified(settings.GameFolder)) throw new InvalidDataException("The game folder must be an absolute path.");
     }
     public static void Save(Settings settings, string? filePath = null)
@@ -96,7 +89,6 @@ public static class Native
 
 public static class Game
 {
-    public static string? SandboxiePath => new[] { @"C:\Program Files\Sandboxie-Plus\Start.exe", @"C:\Program Files\Sandboxie\Start.exe" }.FirstOrDefault(File.Exists);
     public static List<Process> Find(Profile profile, string folder)
     {
         var expected = Path.GetFullPath(Path.Combine(folder, profile.ProcessName + ".exe"));
@@ -140,12 +132,7 @@ public static class Game
     public static ProcessStartInfo StartInfo(Profile profile, string folder)
     {
         var game = Path.Combine(folder, profile.ProcessName + ".exe");
-        if (!profile.Isolated) return new ProcessStartInfo(game) { WorkingDirectory = folder, UseShellExecute = true };
-        var sandboxie = SandboxiePath ?? throw new IOException("Sandboxie Plus is not installed. Open Account setup for installation and sandbox instructions, or edit this profile to use Shared login.");
-        var info = new ProcessStartInfo(sandboxie) { WorkingDirectory = folder, UseShellExecute = false, CreateNoWindow = true };
-        info.ArgumentList.Add("/box:" + profile.Sandbox);
-        info.ArgumentList.Add(game);
-        return info;
+        return new ProcessStartInfo(game) { WorkingDirectory = folder, UseShellExecute = true };
     }
 }
 
@@ -155,18 +142,6 @@ public static class Program
     [STAThread] public static int Main(string[] args)
     {
         if (args.Contains("--self-test")) return SelfTest.Run();
-        if (args.Length == 2 && args[0] == "--prepare-sandbox")
-        {
-            Directory.CreateDirectory(Store.Root);
-            try
-            {
-                var start = Game.SandboxiePath ?? throw new IOException("Sandboxie is not installed.");
-                var sandboxCreated = Sandboxie.EnsureAsync(args[1], start).GetAwaiter().GetResult();
-                File.WriteAllText(Path.Combine(Store.Root,"sandbox-setup.txt"), $"{args[1]}: " + (sandboxCreated ? "created with persistent storage." : "existing persistent sandbox verified."));
-                return 0;
-            }
-            catch (Exception error) { File.WriteAllText(Path.Combine(Store.Root,"sandbox-setup.txt"),error.Message); return 1; }
-        }
         var preview = args.Length == 2 && (args[0] == "--preview" || args[0] == "--preview-editor");
         var launchSlot = args.Length == 2 && args[0] == "--launch" && int.TryParse(args[1], out var slot) && slot >= 1 && slot <= 12 ? slot : 0;
         using var single = new Mutex(true, "Local\\" + PipeName, out var created);
@@ -184,7 +159,7 @@ public static class Program
             app.MainWindow = window;
             if (preview)
             {
-                Window target = args[0] == "--preview-editor" ? new ProfileEditor(new Profile { Slot = 1, Sandbox = "RO1", Name = "Main account" }) : window;
+                Window target = args[0] == "--preview-editor" ? new ProfileEditor(new Profile { Slot = 1, Name = "Main account" }) : window;
                 target.Show();
                 target.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 target.UpdateLayout();
@@ -263,7 +238,6 @@ public sealed class LauncherWindow : Window
         var header = new DockPanel { Margin = new Thickness(0,0,0,23) };
         var headerButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         headerButtons.Children.Add(Button("Game folder", ChooseFolder));
-        headerButtons.Children.Add(Button("Account setup", AccountSetup));
         headerButtons.Children.Add(Button("+ Add instance", AddProfile, true));
         DockPanel.SetDock(headerButtons, Dock.Right); header.Children.Add(headerButtons);
         var heading = new StackPanel();
@@ -282,7 +256,7 @@ public sealed class LauncherWindow : Window
         var scroll = new ScrollViewer { Content = cards, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0,0,8,0) }; Grid.SetRow(scroll,3); shell.Children.Add(scroll);
         var footer = new StackPanel { Margin = new Thickness(0,14,0,0) };
         feedback.Margin = new Thickness(0,0,0,8); footer.Children.Add(feedback);
-        footer.Children.Add(Text("Shared login uses the last account. Separate remembered logins require a persistent sandbox per profile.", 11, "#8D9DB7"));
+        footer.Children.Add(Text("Account labels identify your windows. Sign in through the game; all instances share its remembered login.", 11, "#8D9DB7"));
         footer.Children.Add(Text("Closing this window keeps the launcher in the notification area while it manages your titles.", 11, "#8D9DB7"));
         Grid.SetRow(footer,4); shell.Children.Add(footer); Content = shell;
         RenderCards(); Refresh();
@@ -311,7 +285,6 @@ public sealed class LauncherWindow : Window
             var detail = string.IsNullOrWhiteSpace(profile.Account) ? "No account label yet" : profile.Account;
             if (!string.IsNullOrWhiteSpace(profile.Server)) detail += "  ·  " + profile.Server;
             identity.Children.Add(Text(detail,12,"#AAB6CC"));
-            var mode = Text(profile.Isolated ? "Separate login  ·  " + profile.Sandbox : "Shared login",11,profile.Isolated ? "#8BE6CB" : "#EBCB8B"); mode.Margin = new Thickness(0,5,0,0); identity.Children.Add(mode);
             Grid.SetColumn(identity,1); row.Children.Add(identity);
             var state = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             var status = Text("Stopped",12,"#AAB6CC"); var usage = Text("Ready to launch",11,"#8D9DB7"); usage.Margin = new Thickness(0,5,0,0); state.Children.Add(status); state.Children.Add(usage); Grid.SetColumn(state,2); row.Children.Add(state);
@@ -339,7 +312,7 @@ public sealed class LauncherWindow : Window
             var row = rows[profile.Slot];
             var isPending = pending.TryGetValue(profile.Slot, out var since) && DateTime.UtcNow - since < TimeSpan.FromSeconds(45);
             if (processes.Count > 0) { running++; pending.Remove(profile.Slot); }
-            else if (pending.ContainsKey(profile.Slot) && !isPending) { pending.Remove(profile.Slot); Say($"Instance {profile.Slot} did not appear. Check the game or Sandboxie message before trying again.",true); }
+            else if (pending.ContainsKey(profile.Slot) && !isPending) { pending.Remove(profile.Slot); Say($"Instance {profile.Slot} did not appear. Check the game message before trying again.",true); }
             row.Status.Text = processes.Count > 0 ? "● Running" : isPending || starting.Contains(profile.Slot) ? "Starting…" : "○ Stopped";
             row.Status.Foreground = Brush(processes.Count > 0 ? "#8BE6CB" : "#AAB6CC");
             row.Usage.Text = processes.Count > 0 ? $"{processes.Sum(p => SafeWorkingSet(p)) / 1073741824.0:F1} GB in RAM" : isPending ? "Waiting for window" : "Ready to launch";
@@ -367,20 +340,10 @@ public sealed class LauncherWindow : Window
             var usage = Native.ReadUsage().Memory;
             if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another RO instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
             var start = Game.StartInfo(profile,settings.GameFolder);
-            if (profile.Isolated)
-            {
-                Say($"Preparing sandbox {profile.Sandbox}…");
-                await Sandboxie.EnsureAsync(profile.Sandbox, start.FileName);
-            }
             await Task.Run(() => Game.EnsureFiles(profile,settings.GameFolder));
             var process = Process.Start(start) ?? throw new IOException("Windows could not start this instance.");
             pending[slot] = DateTime.UtcNow;
-            Say($"Starting Instance {slot}" + (profile.Isolated ? $" in {profile.Sandbox}. Log in inside that sandbox." : ".") );
-            if (profile.Isolated)
-            {
-                var completed = await Task.WhenAny(process.WaitForExitAsync(),Task.Delay(3000));
-                if (completed.IsCompleted && process.HasExited && process.ExitCode != 0) { pending.Remove(slot); throw new IOException($"Sandboxie could not launch the game in {profile.Sandbox} (exit {process.ExitCode}). The sandbox was configured; check Sandboxie's message for the launch failure."); }
-            }
+            Say($"Starting Instance {slot}.");
             process.Dispose();
         }
         catch (Exception e) { Say(e.Message,true); MessageBox.Show(this,e.Message,"Could not launch",MessageBoxButton.OK,MessageBoxImage.Warning); }
@@ -400,14 +363,14 @@ public sealed class LauncherWindow : Window
         var original = JsonSerializer.Serialize(profile);
         var editor = new ProfileEditor(profile) { Owner = this };
         if (editor.ShowDialog() != true) return;
-        try { Store.Save(settings); RenderCards(); Refresh(); Say($"Saved Instance {profile.Slot}. Names apply now; login storage changes apply on its next launch."); }
+        try { Store.Save(settings); RenderCards(); Refresh(); Say($"Saved Instance {profile.Slot}. Names apply now."); }
         catch (Exception e) { var restore = JsonSerializer.Deserialize<Profile>(original)!; settings.Profiles[settings.Profiles.IndexOf(profile)] = restore; MessageBox.Show(this,e.Message,"Could not save profile"); }
     }
     void AddProfile()
     {
         var next = Enumerable.Range(1,12).FirstOrDefault(i => settings.Profiles.All(p => p.Slot != i));
         if (next == 0) { Say("This launcher supports up to 12 profiles.",true); return; }
-        var profile = new Profile { Slot = next, Sandbox = "RO" + next };
+        var profile = new Profile { Slot = next };
         var editor = new ProfileEditor(profile) { Owner = this };
         if (editor.ShowDialog() != true) return;
         settings.Profiles.Add(profile);
@@ -422,20 +385,7 @@ public sealed class LauncherWindow : Window
         var previous = settings.GameFolder; settings.GameFolder = picker.FolderName;
         try { Store.Save(settings); Refresh(); Say("Game folder saved."); } catch (Exception e) { settings.GameFolder = previous; Say(e.Message,true); }
     }
-    void AccountSetup()
-    {
-        var dialog = new Window { Owner = this, Title = "Remember an account per instance", Width = 600, Height = 660, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = Brush("#0D1626") };
-        var stack = new StackPanel { Margin = new Thickness(28) };
-        stack.Children.Add(Text("Keep each account in its own sandbox",22));
-        var description = Text("Account labels help identify windows. They do not save a login session. Shared login mode continues to use the game's last account.",14,"#AAB6CC"); description.Margin = new Thickness(0,15,0,20); stack.Children.Add(description);
-        foreach (var line in new[] { "1. Install Sandboxie Plus from its official website.", "2. Close the corresponding game window. Edit its profile here and select Separate login. Use a different sandbox name per account.", "3. Launch. The app creates a missing sandbox with persistent storage automatically. Existing sandbox settings are preserved.", "4. If the game supports sandboxing, sign in through the game, then close and reopen it to test account persistence." })
-        { var text = Text(line,14); text.Margin = new Thickness(0,0,0,14); stack.Children.Add(text); }
-        stack.Children.Add(Text("The tested RO client rejects Sandboxie with THEMIS Error 1000-1. Automatic setup does not resolve that game restriction. The launcher does not capture passwords or copy login tokens.",12,"#EBCB8B"));
-        var buttons = new WrapPanel { Margin = new Thickness(0,22,0,0) };
-        buttons.Children.Add(Button("Official download", () => Process.Start(new ProcessStartInfo("https://sandboxie-plus.com/downloads/") { UseShellExecute = true }),true));
-        buttons.Children.Add(Button("Open Sandboxie", () => { var path = Game.SandboxiePath; var manager = path == null ? null : Path.Combine(Path.GetDirectoryName(path)!,"SandMan.exe"); if (manager != null && File.Exists(manager)) Process.Start(new ProcessStartInfo(manager) { UseShellExecute = true }); else MessageBox.Show(dialog,"Sandboxie Plus is not installed in its default location."); }));
-        buttons.Children.Add(Button("Done",dialog.Close)); stack.Children.Add(buttons); dialog.Content = stack; dialog.ShowDialog();
-    }
+
 }
 
 public sealed class UniformGridCompat : System.Windows.Controls.Primitives.UniformGrid { public UniformGridCompat(int columns) { Columns = columns; } }
@@ -444,7 +394,7 @@ public sealed class ProfileEditor : Window
 {
     public ProfileEditor(Profile profile)
     {
-        Title = "Edit Instance " + profile.Slot; Width = 520; Height = 645; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Title = "Edit Instance " + profile.Slot; Width = 520; Height = 490; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(13,22,38)); FontFamily = new FontFamily("Segoe UI");
         var panel = new StackPanel { Margin = new Thickness(28) };
         panel.Children.Add(LauncherWindow.Text("Instance " + profile.Slot,24));
@@ -456,17 +406,12 @@ public sealed class ProfileEditor : Window
         var name = Field("Profile name  ·  appears in the game title",profile.Name);
         var account = Field("Account label or email  ·  optional",profile.Account);
         var server = Field("Server / character note  ·  optional",profile.Server);
-        var modeLabel = LauncherWindow.Text("Login storage",12,"#AAB6CC"); modeLabel.Margin = new Thickness(0,16,0,6); panel.Children.Add(modeLabel);
-        var mode = new ComboBox { FontSize = 14, Padding = new Thickness(9), ItemsSource = new[] { "Shared login (normal launch)", "Separate login (Sandboxie Plus)" }, SelectedIndex = profile.Isolated ? 1 : 0 }; panel.Children.Add(mode);
-        var boxName = Field("Sandbox name  ·  created automatically when missing",profile.Sandbox);
-        boxName.IsEnabled = profile.Isolated; mode.SelectionChanged += (_, _) => boxName.IsEnabled = mode.SelectedIndex == 1;
-        var hint = LauncherWindow.Text("Labels are saved on this PC. Passwords are entered only in the game. Separate login requires Sandboxie and a restart of this instance.",12,"#AAB6CC"); hint.Margin = new Thickness(0,16,0,16); panel.Children.Add(hint);
+        var hint = LauncherWindow.Text("Labels are saved on this PC and do not switch accounts. Enter passwords only in the game.",12,"#AAB6CC"); hint.Margin = new Thickness(0,16,0,16); panel.Children.Add(hint);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(18,9,18,9), Margin = new Thickness(0,0,8,0), IsCancel = true }; buttons.Children.Add(cancel);
         var save = new Button { Content = "Save profile", Padding = new Thickness(18,9,18,9), IsDefault = true };
         save.Click += (_, _) => {
-            if (mode.SelectedIndex == 1) { try { Sandboxie.ValidateName(boxName.Text.Trim()); } catch (InvalidDataException error) { MessageBox.Show(this,error.Message); return; } }
-            profile.Name = name.Text.Trim(); profile.Account = account.Text.Trim(); profile.Server = server.Text.Trim(); profile.Isolated = mode.SelectedIndex == 1; profile.Sandbox = boxName.Text.Trim(); DialogResult = true;
+            profile.Name = name.Text.Trim(); profile.Account = account.Text.Trim(); profile.Server = server.Text.Trim(); DialogResult = true;
         };
         buttons.Children.Add(save); panel.Children.Add(buttons); Content = panel;
     }
@@ -480,7 +425,7 @@ public static class SelfTest
         void Check(bool condition,string name) { if (!condition) throw new Exception("FAIL: " + name); report.Add("PASS: " + name); }
         try
         {
-            var settings = new Settings { Profiles = Enumerable.Range(1,4).Select(i => new Profile { Slot = i, Sandbox = "RO" + i }).ToList() };
+            var settings = new Settings { Profiles = Enumerable.Range(1,4).Select(i => new Profile { Slot = i }).ToList() };
             Store.Validate(settings);
             Check(settings.Profiles[0].ProcessName == "ro_win" && settings.Profiles[3].ProcessName == "ro_win3","instance-to-executable mapping");
             settings.Profiles[0].Name = "Main account";
@@ -489,11 +434,13 @@ public static class SelfTest
             Store.Validate(copy); Check(copy.Profiles[0].Name == "Main account","profile JSON round-trip");
             copy.Profiles[1].Slot = 1;
             bool rejected = false; try { Store.Validate(copy); } catch (InvalidDataException) { rejected = true; } Check(rejected,"duplicate instance rejected");
-            copy = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))!;
-            copy.Profiles[0].Isolated = copy.Profiles[1].Isolated = true; copy.Profiles[1].Sandbox = "ro1";
-            rejected = false; try { Store.Validate(copy); } catch (InvalidDataException) { rejected = true; } Check(rejected,"shared sandbox rejected for separate accounts");
-            copy.Profiles[1].Sandbox = "bad /box:name";
-            rejected = false; try { Store.Validate(copy); } catch (InvalidDataException) { rejected = true; } Check(rejected,"invalid sandbox argument rejected");
+            var legacy = JsonSerializer.Deserialize<Settings>("""{"Profiles":[{"Slot":3,"Name":"Main","Account":"user@example.invalid","Server":"A","Isolated":true,"Sandbox":"RO3"}]}""")!;
+            Store.Validate(legacy);
+            Check(legacy.Profiles[0].Name == "Main" && legacy.Profiles[0].Account == "user@example.invalid" && legacy.Profiles[0].Server == "A", "legacy profile labels preserved");
+            var migrated = JsonSerializer.Serialize(legacy);
+            Check(!migrated.Contains("Isolated") && !migrated.Contains("Sandbox"), "obsolete isolation settings removed on save");
+            var legacyStart = Game.StartInfo(legacy.Profiles[0], legacy.GameFolder);
+            Check(legacyStart.FileName.EndsWith("ro_win2.exe") && legacyStart.UseShellExecute && legacyStart.ArgumentList.Count == 0, "legacy isolated profile launches game directly");
             var start = Game.StartInfo(settings.Profiles[3],settings.GameFolder);
             Check(start.FileName.EndsWith("ro_win3.exe") && start.WorkingDirectory == settings.GameFolder,"launch target and working directory");
             Check(Native.ReadUsage().Memory.TotalPhysical > 0,"live memory metrics");
@@ -503,7 +450,7 @@ public static class SelfTest
             Store.Save(settings,testFile);
             Check(Store.Load(testFile).Profiles[0].Account == "test@example.invalid", "atomic save and reload from disk");
             Check(Store.Load(testFile + ".bak").Profiles[0].Account == "", "previous profiles preserved in backup");
-            var edited = new Profile { Slot = 1, Sandbox = "RO1" };
+            var edited = new Profile { Slot = 1 };
             var editor = new ProfileEditor(edited);
             editor.Loaded += (_, _) => editor.Dispatcher.BeginInvoke(new Action(() => {
                 var content = (StackPanel)editor.Content;
@@ -513,14 +460,13 @@ public static class SelfTest
                 actions.Children.OfType<Button>().Last().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }));
             Check(editor.ShowDialog() == true && edited.Name == "Saved main" && edited.Account == "user@example.invalid" && edited.Server == "Server A", "profile editor Save interaction");
-            var cancelled = new Profile { Slot = 2, Name = "Original", Sandbox = "RO2" };
+            var cancelled = new Profile { Slot = 2, Name = "Original" };
             var cancelEditor = new ProfileEditor(cancelled);
             cancelEditor.Loaded += (_, _) => cancelEditor.Dispatcher.BeginInvoke(new Action(() => {
                 ((StackPanel)cancelEditor.Content).Children.OfType<TextBox>().First().Text = "Unsaved";
                 cancelEditor.DialogResult = false;
             }));
             Check(cancelEditor.ShowDialog() == false && cancelled.Name == "Original", "profile editor cancellation preserves values");
-            SandboxieTests.Run(Check);
             Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 0;
         }
         catch (Exception e) { report.Add(e.ToString()); Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 1; }

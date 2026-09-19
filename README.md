@@ -17,7 +17,6 @@ Releases include `SHA256SUMS.txt` for verifying the download with PowerShell's `
 - Warn before launching with low memory headroom.
 - Prepare additional small executable copies and junctions to the original `ro_win_Data` folder.
 - Keep running in the notification area when its window is closed.
-- Optionally launch profiles in distinct Sandboxie Plus sandboxes, creating missing persistent sandboxes automatically.
 
 ## Requirements
 
@@ -60,8 +59,8 @@ Pushing a version tag also publishes a GitHub Release with the tested EXE, READM
 
 ```powershell
 # First update the project Version, commit it, and push main.
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 The workflow publishes releases using GitHub's built-in token; no personal access token or extra secret is required. A failed build or test prevents publication. Tags identify immutable release versions; use a new version for subsequent releases.
@@ -84,16 +83,9 @@ Closing the app window hides it in the notification area. Double-click its icon 
 
 ## Accounts and remembered logins
 
-**Saved labels do not save or switch a login session.** In Shared login mode, the game still uses its last signed-in account. Profile names, optional email labels, and notes are plain text on the current Windows account; do not put passwords in those fields.
+**Saved labels do not save or switch a login session.** All instances launch normally and share the game's last signed-in account. Profile names, optional email labels, and notes are plain text on the current Windows account; do not put passwords in those fields.
 
-The application does not capture passwords, export registry credentials, or copy login tokens. Actual separate remembered logins require separate storage. Optional Sandboxie Plus support uses the documented `Start.exe /box:NAME game.exe` command. It does not install Sandboxie. Before launching, it uses `SbieIni.exe` to create a missing sandbox with `AutoDelete=n`, `AutoRecover=n`, and `Enabled=y`, then reloads and verifies the configuration. Existing sandbox settings are preserved. An existing disabled or auto-deleting sandbox produces an actionable error instead of silently changing its settings or starting the game.
-
-**Compatibility result:** the 2026-09-19 test with Sandboxie Plus 1.18.4 reached game startup, then failed with **THEMIS Error 1000-1: Can't run in virtual machine environment!** Use Shared login for the tested client. Separate login persistence is not working in this configuration. See the [integration trial](docs/Sandboxie-compatibility.md).
-
-For a future client confirmed compatible by the publisher, follow **Account setup** in the app. Close the corresponding existing game, select Separate login, and use a different sandbox name for each profile. Launch creates the sandbox when needed. Sign in through the game yourself and verify that login persists after closing and reopening before relying on it. Game sessions may expire normally.
-
-- [Sandboxie Plus official downloads](https://sandboxie-plus.com/downloads/)
-- [Sandboxie command-line reference](https://sandboxie-plus.github.io/sandboxie-docs/Content/StartCommandLine/)
+The application does not capture passwords, export registry credentials, or copy login tokens. Sign in through the game. Older profile files are migrated automatically while preserving names, account labels, and notes.
 
 ## Local data
 
@@ -111,11 +103,9 @@ No game assets, credentials, or personal profile files are committed. Existing p
 
 ## Development and validation
 
-`src\Program.cs` contains the native WPF UI, profile persistence, process controls, resource metrics, and self-tests. `src\Sandboxie.cs` manages verified automatic sandbox preparation, with isolated tests in `src\SandboxieTests.cs`. `src\ROInstances.csproj` defines the .NET Windows app. There are no third-party NuGet dependencies.
+`src\Program.cs` contains the native WPF UI, profile persistence, process controls, resource metrics, and self-tests. `src\ROInstances.csproj` defines the .NET Windows app. There are no third-party NuGet dependencies.
 
-The self-tests cover instance mapping, titles, JSON round trips, invalid and duplicate profile rejection, launch targets, system metrics, atomic saving and backup recovery, and the actual profile editor Save/Cancel interactions. Sandbox preparation tests cover creation, idempotency, preserved settings, disabled/auto-deleting sandboxes, configuration failures, and reserved names. They use a fake configuration tool and do not alter real sandboxes, launch or stop game processes, test game compatibility, or authenticate accounts.
-
-To prepare and verify a real sandbox without starting a game, run the executable with `--prepare-sandbox RO3`. This intentionally creates the named sandbox if missing and writes the result to `%LOCALAPPDATA%\ROInstanceLaunchers\sandbox-setup.txt`.
+The self-tests cover instance mapping, titles, JSON round trips, duplicate profile rejection, direct launch targets, migration of older profiles, system metrics, atomic saving and backup recovery, and the actual profile editor Save/Cancel interactions. They do not launch or stop game processes or authenticate accounts.
 
 Optional layout previews:
 
