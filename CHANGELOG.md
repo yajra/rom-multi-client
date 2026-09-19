@@ -2,6 +2,13 @@
 
 Release Please maintains new entries from Conventional Commits. Versions follow Semantic Versioning. Historical releases below were recorded before automation.
 
+## [1.3.0](https://github.com/yajra/ROInstanceLauncher/compare/v1.2.1...v1.3.0) (2026-09-19)
+
+
+### Features
+
+* **updates:** check and install verified launcher releases ([66a0ae8](https://github.com/yajra/ROInstanceLauncher/commit/66a0ae8fe25751cbcc0ea221bb14b045c42b4648))
+
 ## [1.2.1](https://github.com/yajra/ROInstanceLauncher/compare/v1.2.0...v1.2.1) (2026-09-19)
 
 
