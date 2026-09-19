@@ -2,6 +2,13 @@
 
 Release Please maintains new entries from Conventional Commits. Versions follow Semantic Versioning. Historical releases below were recorded before automation.
 
+## [1.1.0](https://github.com/yajra/ROInstanceLauncher/compare/v1.0.2...v1.1.0) (2026-09-19)
+
+
+### Features
+
+* **release:** automate changelog and semantic version releases ([098430a](https://github.com/yajra/ROInstanceLauncher/commit/098430a92cc19f9e15a5aed9db5ca509b81dce4b))
+
 ## [1.0.2](https://github.com/yajra/ROInstanceLauncher/releases/tag/v1.0.2) (2026-09-19)
 
 ### Changes
