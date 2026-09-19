@@ -90,6 +90,16 @@ Use **Game folder** if your installation is elsewhere. The initial default is `C
 
 Closing the app window hides it in the notification area. Double-click its icon to reopen, or use **Exit launcher (leave games running)** to stop the app without closing games.
 
+## Launcher updates
+
+The launcher checks GitHub for stable releases at startup and every six hours. Turn **Check automatically** off to use **Check for updates** manually. When a newer version is available, choose **Update and restart** to download and install it; downloads can be cancelled. This updates the launcher, not the Eternal Love game files.
+
+The EXE is checked against the release's SHA-256 checksum and expected version before installation. The launcher restarts at the same path, preserving shortcuts, profiles, and running game windows. The previous EXE is kept beside it with a `.previous` suffix and is restored automatically if the new launcher fails its startup check. The app folder must be writable by your Windows account.
+
+While the GitHub repository is private, the launcher uses a token saved through **GitHub access**, or an existing GitHub CLI sign-in (`gh auth login`). A fine-grained token needs **Contents: Read** permission for this repository. Saved tokens live in Windows Credential Manager, not in profile files. Public releases work without authentication once the repository becomes public.
+
+Update downloads and diagnostic reports are stored under `%LOCALAPPDATA%\ROInstanceLaunchers\Updates`. For diagnostics, `--check-updates` writes `check.txt` there. `--install-update` performs a verified update without the UI; exit the launcher first. Automatic checks never install or restart it without your action.
+
 ## Accounts and remembered logins
 
 **Saved labels do not save or switch a login session.** All instances launch normally and share the game's last signed-in account. Profile names, optional email labels, and notes are plain text on the current Windows account; do not put passwords in those fields.

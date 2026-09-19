@@ -52,6 +52,7 @@ public sealed class Profile
 
 public sealed class Settings
 {
+    public bool CheckForUpdates { get; set; } = true;
     public string GameFolder { get; set; } = @"C:\Program Files (x86)\XD\ROLauncher";
     public List<Profile> Profiles { get; set; } = new();
 }
@@ -163,6 +164,19 @@ public static class Program
     public static readonly string PipeName = "ROInstances_" + Environment.UserName;
     [STAThread] public static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--apply-update") return Updates.Apply(args);
+        if (args.Length == 1 && args[0] == "--check-updates") return Updates.CommandLineAsync(false).GetAwaiter().GetResult();
+        if (args.Length == 1 && args[0] == "--install-update")
+        {
+            using var updateLock = new Mutex(true, "Local\\" + PipeName, out var canUpdate);
+            if (!canUpdate)
+            {
+                Directory.CreateDirectory(Updates.Root);
+                File.WriteAllText(Path.Combine(Updates.Root, "check.txt"), "Exit the launcher before using --install-update, or use Update and restart in its window.");
+                return 1;
+            }
+            return Updates.CommandLineAsync(true).GetAwaiter().GetResult();
+        }
         if (args.Contains("--self-test")) return SelfTest.Run();
         var preview = args.Length == 2 && (args[0] == "--preview" || args[0] == "--preview-editor");
         var launchSlot = args.Length == 2 && args[0] == "--launch" && int.TryParse(args[1], out var slot) && slot >= 1 && slot <= 12 ? slot : 0;
@@ -179,6 +193,8 @@ public static class Program
         {
             var window = new LauncherWindow(preview);
             app.MainWindow = window;
+            if (args.Length == 2 && args[0] == "--update-complete")
+                window.ContentRendered += (_, _) => Updates.MarkStarted(args[1]);
             if (preview)
             {
                 Window target = args[0] == "--preview-editor" ? new ProfileEditor(new Profile { Slot = 1, Name = "Main account" }) : window;
@@ -295,6 +311,8 @@ public sealed class LauncherWindow : Window
         feedback.Margin = new Thickness(0,0,0,8); footer.Children.Add(feedback);
         footer.Children.Add(Text("Profile labels identify your Eternal Love windows. Sign in through the game; remembered login is shared.", 11, "#8D9DB7"));
         footer.Children.Add(Text("Closing this window keeps the launcher in the notification area while it manages your titles.", 11, "#8D9DB7"));
+        footer.Children.Add(new UpdatesPanel(settings, preview, () => !batchLaunching && starting.Count == 0,
+            () => { AllowExit = true; Close(); System.Windows.Application.Current.Shutdown(); }));
         Grid.SetRow(footer,4); shell.Children.Add(footer); Content = shell;
         RenderCards(); Refresh();
         if (!preview)
@@ -589,6 +607,7 @@ public static class SelfTest
             }));
             Check(cancelEditor.ShowDialog() == false && cancelled.Name == "Original", "profile editor cancellation preserves values");
             LauncherWindow.TestSelection(Check);
+            UpdateTests.Run(Check);
             Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 0;
         }
         catch (Exception e) { report.Add(e.ToString()); Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 1; }
