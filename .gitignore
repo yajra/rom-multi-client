@@ -1,0 +1,15 @@
+# Build outputs and IDE state
+**/bin/
+**/obj/
+artifacts/
+.vs/
+.idea/
+*.user
+*.suo
+
+# Local profiles, credentials, and diagnostic captures
+profiles*.json*
+self-test.txt
+*-preview.png
+*.log
+.env
