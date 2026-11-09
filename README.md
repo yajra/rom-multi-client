@@ -44,7 +44,15 @@ Keep up to **12 instance profiles** in one place, with names and notes that make
 
 **You need:** Windows 10 or 11 x64, an existing Ragnarok M: Eternal Love installation, and write access to its game folder. Your hardware determines how many instances can run comfortably; the launcher warns when memory is low.
 
-> **Account labels are for organization.** They do not save passwords or switch game accounts. Instances share the game's remembered login; sign in through the game.
+> **Using different accounts?** You need to sign in to the account you want inside each game window. See the [known limitation](#known-limitation-signing-in-to-different-accounts) below.
+
+## Known limitation: signing in to different accounts
+
+**ROM remembers only one account: the last account you signed in to.** It does not remember a different account for each game window.
+
+For example, if you last signed in with Account A, a new game window may show Account A too—even if you named that launcher profile "Account B". To play as Account B, switch accounts and sign in to Account B inside that game window. Repeat this for each window where you want to use a different account.
+
+Names and account labels in the launcher are just reminders to help you tell your windows apart. They do not log you in or switch accounts. The launcher does not save your game passwords.
 
 ## Everyday controls
 
