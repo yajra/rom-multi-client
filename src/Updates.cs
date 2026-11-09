@@ -17,8 +17,8 @@ public sealed record LauncherRelease(Version Version, string AssetName, long Ass
 
 public static class Updates
 {
-    const string Api = "https://api.github.com/repos/yajra/ROInstanceLauncher";
-    public const string ReleasePage = "https://github.com/yajra/ROInstanceLauncher/releases/latest";
+    const string Api = "https://api.github.com/repos/yajra/rom-multi-client";
+    public const string ReleasePage = "https://github.com/yajra/rom-multi-client/releases/latest";
     public static Version CurrentVersion => new(typeof(Updates).Assembly.GetName().Version!.ToString(3));
     public static string Root => Path.Combine(Store.Root, "Updates");
     public static string ResultPath => Path.Combine(Root, "result.txt");
@@ -46,13 +46,13 @@ public static class Updates
         return new LauncherRelease(version, name, id, size, checksumId);
     }
     static HttpClient Client() => new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(5) };
-    static async Task<HttpResponseMessage> Request(HttpClient client, string url, string? token, bool binary, CancellationToken cancel)
+    static async Task<HttpResponseMessage> Request(HttpClient client, string url, bool binary, CancellationToken cancel)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.UserAgent.ParseAdd("RO-Eternal-Love-Launcher/" + CurrentVersion);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(binary ? "application/octet-stream" : "application/vnd.github+json"));
         request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
-        if (!string.IsNullOrWhiteSpace(token)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
         var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancel);
         if (binary && (int)response.StatusCode is 301 or 302 or 303 or 307 or 308)
         {
@@ -60,14 +60,14 @@ public static class Updates
             response.Dispose();
             if (location == null || !location.IsAbsoluteUri || location.Scheme != "https" || location.Host != "release-assets.githubusercontent.com")
                 throw new IOException("GitHub returned an unexpected download location.");
-            // Never send the GitHub token to the asset CDN.
+            // Follow only the expected public GitHub asset CDN.
             response = await client.GetAsync(location, HttpCompletionOption.ResponseHeadersRead, cancel);
         }
         if (!response.IsSuccessStatusCode)
         {
             var status = response.StatusCode; response.Dispose();
             if (status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
-                throw new IOException("Updates need GitHub access to yajra/ROInstanceLauncher. Open GitHub access to configure it, or check your existing sign-in and API limits.");
+                throw new IOException("GitHub could not provide the public release. It may be temporarily unavailable or the API rate limit was reached. Try again later or visit Release notes.");
             throw new IOException("GitHub could not serve the update. Try again later.");
         }
         return response;
@@ -75,7 +75,7 @@ public static class Updates
     public static async Task<LauncherRelease?> CheckAsync(CancellationToken cancel)
     {
         using var client = Client();
-        using var response = await Request(client, Api + "/releases/latest", await UpdateCredentials.ReadAsync(), false, cancel);
+        using var response = await Request(client, Api + "/releases/latest", false, cancel);
         return ParseRelease(await response.Content.ReadAsStringAsync(cancel), CurrentVersion);
     }
     public static async Task<int> CommandLineAsync(bool install)
@@ -111,16 +111,16 @@ public static class Updates
     }
     public static async Task<(string Path, string Hash)> DownloadAsync(LauncherRelease release, IProgress<int> progress, CancellationToken cancel)
     {
-        var token = await UpdateCredentials.ReadAsync();
+
         using var client = Client();
-        using var checksum = await Request(client, Api + "/releases/assets/" + release.ChecksumId, token, true, cancel);
+        using var checksum = await Request(client, Api + "/releases/assets/" + release.ChecksumId, true, cancel);
         if (checksum.Content.Headers.ContentLength > 65536) throw new IOException("Invalid checksum download.");
         var hash = ExpectedHash(await checksum.Content.ReadAsStringAsync(cancel), release.AssetName);
         Directory.CreateDirectory(Root);
         var destination = Path.Combine(Root, Guid.NewGuid().ToString("N") + ".exe");
         try
         {
-            using var response = await Request(client, Api + "/releases/assets/" + release.AssetId, token, true, cancel);
+            using var response = await Request(client, Api + "/releases/assets/" + release.AssetId, true, cancel);
             await using (var input = await response.Content.ReadAsStreamAsync(cancel))
             await using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
             {

@@ -4,9 +4,9 @@ A Windows multi-instance launcher for **Ragnarok M: Eternal Love**. Launch your 
 
 ## Download
 
-Open the [latest GitHub release](https://github.com/yajra/ROInstanceLauncher/releases/latest) and download **RO-Eternal-Love-Launcher-VERSION-win-x64.exe**. It is a single executable for Windows x64 with the .NET runtime included: no installer or separate runtime installation is needed. Put it in a permanent folder and double-click it. Saved profiles stay in your local app-data folder when replacing the EXE with a newer release.
+Open the [latest GitHub release](https://github.com/yajra/rom-multi-client/releases/latest) and download **RO-Eternal-Love-Launcher-VERSION-win-x64.exe**. It is a single executable for Windows x64 with the .NET runtime included: no installer or separate runtime installation is needed. Put it in a permanent folder and double-click it. Saved profiles stay in your local app-data folder when replacing the EXE with a newer release.
 
-Releases include `SHA256SUMS.txt` for verifying the download with PowerShell's `Get-FileHash -Algorithm SHA256`. The executable is currently unsigned, so Windows may show a publisher/SmartScreen prompt. This repository is private; downloading requires an account with repository access.
+Releases include `SHA256SUMS.txt` for verifying the download with PowerShell's `Get-FileHash -Algorithm SHA256`. The executable is currently unsigned, so Windows may show a publisher/SmartScreen prompt. This repository is public; downloads do not require a GitHub account.
 
 ## Features
 
@@ -101,7 +101,7 @@ The launcher checks GitHub for stable releases at startup and every six hours. T
 
 The EXE is checked against the release's SHA-256 checksum and expected version before installation. The launcher restarts at the same path, preserving shortcuts, profiles, and running game windows. The previous EXE is kept beside it with a `.previous` suffix and is restored automatically if the new launcher fails its startup check. The app folder must be writable by your Windows account.
 
-While the GitHub repository is private, the launcher uses a token saved through **GitHub access**, or an existing GitHub CLI sign-in (`gh auth login`). A fine-grained token needs **Contents: Read** permission for this repository. Saved tokens live in Windows Credential Manager, not in profile files. Public releases work without authentication once the repository becomes public.
+Open **Settings** for automatic update preferences, **Check for updates**, **Update and restart**, and **Release notes**. Settings opens in a modal dialog. Updates use the public repository without GitHub sign-in or access tokens.
 
 Update downloads and diagnostic reports are stored under `%LOCALAPPDATA%\ROInstanceLaunchers\Updates`. For diagnostics, `--check-updates` writes `check.txt` there. `--install-update` performs a verified update without the UI; exit the launcher first. Automatic checks never install or restart it without your action.
 

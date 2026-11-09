@@ -180,7 +180,7 @@ public static class Program
             return Updates.CommandLineAsync(true).GetAwaiter().GetResult();
         }
         if (args.Contains("--self-test")) return SelfTest.Run();
-        var preview = args.Length == 2 && (args[0] == "--preview" || args[0] == "--preview-editor");
+        var preview = args.Length == 2 && (args[0] == "--preview" || args[0] == "--preview-editor" || args[0] == "--preview-settings");
         var launchSlot = args.Length == 2 && args[0] == "--launch" && int.TryParse(args[1], out var slot) && slot >= 1 && slot <= 12 ? slot : 0;
         using var single = new Mutex(true, "Local\\" + PipeName, out var created);
         if (!created && !preview)
@@ -199,14 +199,20 @@ public static class Program
                 window.ContentRendered += (_, _) => Updates.MarkStarted(args[1]);
             if (preview)
             {
+                if (args[0] == "--preview-settings")
+                {
+                    window.Show();
+                    window.Dispatcher.BeginInvoke(new Action(() => {
+                        var dialog = app.Windows.OfType<Window>().Single(w => w.Owner == window);
+                        SavePreview(dialog, args[1]); dialog.Close();
+                    }), DispatcherPriority.ApplicationIdle);
+                    window.ShowSettings(); window.AllowExit = true; window.Close(); return 0;
+                }
                 Window target = args[0] == "--preview-editor" ? new ProfileEditor(new Profile { Slot = 1, Name = "Main account" }) : window;
                 target.Show();
                 target.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 target.UpdateLayout();
-                var bitmap = new RenderTargetBitmap((int)target.ActualWidth, (int)target.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-                bitmap.Render(target);
-                var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
-                using var output = File.Create(args[1]); encoder.Save(output);
+                SavePreview(target, args[1]);
                 window.AllowExit = true; target.Close(); if (target != window) window.Close(); return 0;
             }
             _ = Task.Run(async () => {
@@ -235,6 +241,14 @@ public static class Program
         catch (Exception e) { MessageBox.Show(e.Message + "\n\nYour saved profiles have not been replaced.", Branding.AppName); return 1; }
         return 0;
     }
+    static void SavePreview(Window target, string path)
+    {
+        target.UpdateLayout();
+        var bitmap = new RenderTargetBitmap((int)target.ActualWidth, (int)target.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(target);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var output = File.Create(path); encoder.Save(output);
+    }
 }
 
 public sealed class LauncherWindow : Window
@@ -242,20 +256,24 @@ public sealed class LauncherWindow : Window
     readonly Settings settings;
     readonly bool preview;
     readonly StackPanel cards = new();
-    readonly TextBlock cpuValue = Text("Measuring.", 22, "#F4F7FC");
+    readonly TextBlock cpuValue = Text("\u2014", 22, "#F4F7FC");
     readonly TextBlock ramValue = Text("-", 22, "#F4F7FC");
     readonly TextBlock commitValue = Text("-", 22, "#F4F7FC");
     readonly TextBlock countValue = Text("-", 22, "#F4F7FC");
-    readonly TextBlock feedback = Text("Ready. Your existing game windows stay open.", 12, "#AAB6CC");
-    readonly Dictionary<int, (TextBlock Status, TextBlock Usage, Button Launch, Button Focus, Button Stop)> rows = new();
+    readonly TextBlock folderStatus = Text("", 12, "#AAB6CC");
+    readonly TextBlock folderLabel = Text("", 16);
+    readonly TextBlock folderDot = Text("\u25cf", 20, "#74F8B0");
+    readonly TextBlock feedback = Text("Ready to launch.", 14, "#E9EFFA");
+    readonly Dictionary<int, (TextBlock Status, TextBlock Usage, Button Launch, Button Focus, MenuItem Stop)> rows = new();
     readonly Dictionary<int, DateTime> pending = new();
     readonly HashSet<int> starting = new();
     readonly HashSet<int> stopping = new();
     readonly HashSet<int> selected = new();
     readonly Dictionary<int, CheckBox> selections = new();
-    readonly CheckBox checkAll = new() { Content = "Check all", Foreground = Brush("#E9EFFA"), VerticalAlignment = VerticalAlignment.Center, FontSize = 13 };
+    readonly CheckBox checkAll = new() { Content = "Select all", Foreground = Brush("#E9EFFA"), VerticalAlignment = VerticalAlignment.Center, FontSize = 13 };
     readonly TextBlock selectionCount = Text("Select instances to launch together", 12, "#AAB6CC");
     readonly Button launchSelected;
+    readonly UpdatesPanel updates;
     bool batchLaunching;
     bool updatingSelection;
     readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -264,10 +282,32 @@ public sealed class LauncherWindow : Window
     public bool AllowExit;
     static SolidColorBrush Brush(string hex) => new((Color)ColorConverter.ConvertFromString(hex));
     public static TextBlock Text(string text, double size = 14, string color = "#E9EFFA") => new() { Text = text, FontSize = size, Foreground = Brush(color), TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
-    static Border Panel(UIElement child, string background = "#172237", int padding = 18) => new() { Child = child, Background = Brush(background), CornerRadius = new CornerRadius(12), Padding = new Thickness(padding), BorderBrush = Brush("#2B3952"), BorderThickness = new Thickness(1) };
-    static Button Button(string label, Action action, bool primary = false)
+    static Border Panel(UIElement child, string background = "#172237", int padding = 18) => new() { Child = child, Background = LauncherTheme.Surface(), CornerRadius = new CornerRadius(9), Padding = new Thickness(padding), BorderBrush = Brush("#354B6C"), BorderThickness = new Thickness(1) };
+    internal static Button Button(string label, Action action, bool primary = false)
     {
-        var button = new Button { Content = label, Padding = new Thickness(15,9,15,9), Margin = new Thickness(5,0,0,0), Background = Brush(primary ? "#8BE6CB" : "#26364F"), Foreground = Brush(primary ? "#102923" : "#F0F5FF"), BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand, FontSize = 13, MinHeight = 36 };
+        var button = new Button { Content = label, Padding = new Thickness(18,8,18,8), Margin = new Thickness(14,0,0,0), Background = primary ? LauncherTheme.Surface("#85FFC0", "#62EEA4") : LauncherTheme.Surface("#223550", "#18283F"), Foreground = Brush(primary ? "#08251C" : "#F0F5FF"), BorderBrush = Brush(primary ? "#87FFC2" : "#526681"), BorderThickness = new Thickness(1), Cursor = System.Windows.Input.Cursors.Hand, FontSize = 16, FontWeight = FontWeights.SemiBold, MinHeight = 40 };
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.Name = "Chrome";
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(7));
+        border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+        border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
+        border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        border.AppendChild(content);
+        var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+        var focusRing = new Trigger { Property = IsKeyboardFocusedProperty, Value = true };
+        focusRing.Setters.Add(new Setter(Border.BorderBrushProperty, Brushes.White, "Chrome"));
+        focusRing.Setters.Add(new Setter(Border.BorderThicknessProperty, new Thickness(2), "Chrome"));
+        template.Triggers.Add(focusRing); button.Template = template;
+        var style = new Style(typeof(Button));
+        var hover = new Trigger { Property = IsMouseOverProperty, Value = true };
+        hover.Setters.Add(new Setter(OpacityProperty, 0.85)); style.Triggers.Add(hover);
+        var disabled = new Trigger { Property = IsEnabledProperty, Value = false };
+        disabled.Setters.Add(new Setter(OpacityProperty, 0.45)); style.Triggers.Add(disabled);
+        button.Style = style;
         button.Click += (_, _) => action(); return button;
     }
     public LauncherWindow(bool isPreview, Settings? previewSettings = null)
@@ -276,47 +316,88 @@ public sealed class LauncherWindow : Window
         settings = isPreview && previewSettings != null ? previewSettings : Store.Load();
         launchSelected = Button("Launch selected", () => { _ = LaunchSelected(); }, true);
         if (!preview) Store.Save(settings);
-        Title = Branding.AppName; Icon = Branding.Icon; Width = 1100; Height = 820; MinWidth = 950; MinHeight = 640;
+        Title = Branding.AppName; Icon = Branding.Icon; Width = 1100; Height = 840; MinWidth = 1000; MinHeight = 640;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        Background = Brush("#0D1626"); FontFamily = new FontFamily("Segoe UI");
-        var shell = new Grid { Margin = new Thickness(30,24,30,20) };
+        Background = LauncherTheme.Surface("#0B152B", "#070F22"); FontFamily = new FontFamily("Segoe UI");
+        Resources.Add(typeof(CheckBox), LauncherTheme.CheckBoxStyle);
+        var shell = new Grid { Margin = new Thickness(20,18,20,18) };
         shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         shell.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         shell.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var header = new DockPanel { Margin = new Thickness(0,0,0,23) };
+        var header = new DockPanel { Margin = new Thickness(4,0,0,16) };
         var headerButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        headerButtons.Children.Add(Button("Game folder", ChooseFolder));
+        var settingsButton = Button("\u2699  Settings", ShowSettings);
+        settingsButton.ToolTip = "Update preferences and release notes";
+        headerButtons.Children.Add(settingsButton);
         headerButtons.Children.Add(Button("+ Add instance", AddProfile, true));
         DockPanel.SetDock(headerButtons, Dock.Right); header.Children.Add(headerButtons);
         var brand = new StackPanel { Orientation = Orientation.Horizontal };
-        brand.Children.Add(new System.Windows.Controls.Image { Source = Branding.Icon, Width = 64, Height = 64, Margin = new Thickness(0,0,16,0), VerticalAlignment = VerticalAlignment.Center, ToolTip = Branding.GameName });
+        brand.Children.Add(new System.Windows.Controls.Image { Source = Branding.Icon, Width = 98, Height = 98, Margin = new Thickness(0,0,20,0), VerticalAlignment = VerticalAlignment.Center, ToolTip = Branding.GameName });
         var heading = new StackPanel();
-        heading.Children.Add(Text("ETERNAL LOVE  /  MULTI-INSTANCE LAUNCHER", 10, "#8BE6CB"));
-        var title = Text(Branding.GameName, 25); title.FontWeight = FontWeights.SemiBold; title.Margin = new Thickness(0,6,0,3); heading.Children.Add(title);
-        heading.Children.Add(Text("Launch and manage your Eternal Love game windows.", 12, "#AAB6CC")); brand.Children.Add(heading); header.Children.Add(brand);
+        heading.VerticalAlignment = VerticalAlignment.Center;
+        heading.Children.Add(Text("ETERNAL LOVE / MULTI-INSTANCE LAUNCHER", 13, "#BDCAE1"));
+        var title = Text(Branding.GameName, 30); title.FontWeight = FontWeights.Bold; title.Margin = new Thickness(0,3,0,4); heading.Children.Add(title);
+        heading.Children.Add(Text("Your accounts. One launcher.", 19, "#AAB6CC")); brand.Children.Add(heading); header.Children.Add(brand);
         shell.Children.Add(header);
-        var metrics = new UniformGridCompat(4) { Margin = new Thickness(0,0,0,20) };
-        foreach (var item in new[] { ("RUNNING", countValue), ("CPU LOAD", cpuValue), ("AVAILABLE RAM", ramValue), ("MEMORY HEADROOM", commitValue) })
-        { var stack = new StackPanel(); stack.Children.Add(Text(item.Item1, 10, "#AAB6CC")); item.Item2.Margin = new Thickness(0,7,0,0); stack.Children.Add(item.Item2); var panel = Panel(stack); panel.Margin = new Thickness(0,0,10,0); metrics.Children.Add(panel); }
-        Grid.SetRow(metrics,1); shell.Children.Add(metrics);
-        var intro = new DockPanel { Margin = new Thickness(0,0,0,12) };
-        intro.MinHeight = 36;
+        shell.RowDefinitions.Insert(1, new RowDefinition { Height = GridLength.Auto });
+        var folderBar = new DockPanel();
+        var changeFolder = Button("Change", ChooseFolder);
+        changeFolder.Background = Brushes.Transparent; changeFolder.BorderThickness = new Thickness(0);
+        changeFolder.FontWeight = FontWeights.Normal; changeFolder.Foreground = Brush("#A9D3FC");
+        changeFolder.MinHeight = 26; changeFolder.Padding = new Thickness(0);
+        changeFolder.Content = new TextBlock { Text = "Change", TextDecorations = TextDecorations.Underline };
+        DockPanel.SetDock(changeFolder, Dock.Right); folderBar.Children.Add(changeFolder);
+        folderDot.Margin = new Thickness(4,0,12,0); DockPanel.SetDock(folderDot, Dock.Left); folderBar.Children.Add(folderDot);
+        folderLabel.FontWeight = FontWeights.Bold; DockPanel.SetDock(folderLabel, Dock.Left); folderBar.Children.Add(folderLabel);
+        var divider = Text("|", 18, "#9AAFCB"); divider.Margin = new Thickness(18,0,18,0);
+        DockPanel.SetDock(divider, Dock.Left); folderBar.Children.Add(divider);
+        folderStatus.TextTrimming = TextTrimming.CharacterEllipsis;
+        folderStatus.TextWrapping = TextWrapping.NoWrap;
+        folderBar.Children.Add(folderStatus);
+        folderStatus.FontSize = 15;
+        var folderPanel = Panel(folderBar, padding: 12); folderPanel.Margin = new Thickness(0,0,0,18);
+        Grid.SetRow(folderPanel,1); shell.Children.Add(folderPanel);
+        var metrics = new UniformGridCompat(4) { Margin = new Thickness(0,0,-14,22) };
+        foreach (var item in new[] { ("RUNNING", countValue, "play"), ("CPU", cpuValue, "cpu"), ("AVAILABLE RAM", ramValue, "ram"), ("MEMORY HEADROOM", commitValue, "layers") })
+        {
+            var metric = new DockPanel(); var symbol = LauncherTheme.Icon(item.Item3); symbol.Margin = new Thickness(0,0,20,0);
+            DockPanel.SetDock(symbol, Dock.Left); metric.Children.Add(symbol);
+            var stack = new StackPanel(); stack.Children.Add(Text(item.Item1, 13, "#B4C6E0"));
+            item.Item2.FontSize = 25; item.Item2.FontWeight = FontWeights.Bold; item.Item2.Margin = new Thickness(0,3,0,0); stack.Children.Add(item.Item2);
+            metric.Children.Add(stack); var panel = Panel(metric, padding: 16); panel.Margin = new Thickness(0,0,14,0); metrics.Children.Add(panel);
+        }
+        Grid.SetRow(metrics,2); shell.Children.Add(metrics);
+        var intro = new DockPanel { Margin = new Thickness(0,0,0,16) };
+        intro.MinHeight = 46;
         DockPanel.SetDock(launchSelected, Dock.Right); intro.Children.Add(launchSelected);
         checkAll.Margin = new Thickness(0,0,18,0);
+        checkAll.FontSize = 17;
         checkAll.Click += (_, _) => SetAllSelected(selected.Count != settings.Profiles.Count);
-        DockPanel.SetDock(checkAll, Dock.Left); intro.Children.Add(checkAll);
-        intro.Children.Add(selectionCount);
-        Grid.SetRow(intro,2); shell.Children.Add(intro);
-        var scroll = new ScrollViewer { Content = cards, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0,0,8,0) }; Grid.SetRow(scroll,3); shell.Children.Add(scroll);
-        var footer = new StackPanel { Margin = new Thickness(0,14,0,0) };
-        feedback.Margin = new Thickness(0,0,0,8); footer.Children.Add(feedback);
-        footer.Children.Add(Text("Profile labels identify your Eternal Love windows. Sign in through the game; remembered login is shared.", 11, "#8D9DB7"));
-        footer.Children.Add(Text("Closing this window keeps the launcher in the notification area while it manages your titles.", 11, "#8D9DB7"));
-        footer.Children.Add(new UpdatesPanel(settings, preview, () => !batchLaunching && starting.Count == 0,
-            () => { AllowExit = true; Close(); System.Windows.Application.Current.Shutdown(); }));
-        Grid.SetRow(footer,4); shell.Children.Add(footer); Content = shell;
+        DockPanel.SetDock(checkAll, Dock.Right); intro.Children.Add(checkAll);
+        var listHeading = new StackPanel();
+        var listTitle = Text("Your instances", 28); listTitle.FontWeight = FontWeights.Bold;
+        listHeading.Children.Add(listTitle); intro.Children.Add(listHeading);
+        launchSelected.ToolTip = "Launch checked instances in order. Already running games are skipped.";
+        Grid.SetRow(intro,3); shell.Children.Add(intro);
+        var scroll = new ScrollViewer { Content = cards, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Padding = new Thickness(0,0,8,0) }; Grid.SetRow(scroll,4); shell.Children.Add(scroll);
+        var footer = new StackPanel { Margin = new Thickness(4,18,0,0) };
+        var footerLine = new DockPanel();
+        var footerMessage = new StackPanel();
+        feedback.Margin = new Thickness(0,0,0,3);
+        var readyLine = new StackPanel { Orientation = Orientation.Horizontal };
+        var readyIcon = Text("\u2713", 14, "#08251C"); readyIcon.FontWeight = FontWeights.Bold; readyIcon.HorizontalAlignment = HorizontalAlignment.Center;
+        readyLine.Children.Add(new Border { Child = readyIcon, Background = Brush("#74F8B0"), Width = 20, Height = 20, CornerRadius = new CornerRadius(10), Margin = new Thickness(0,0,14,0) });
+        readyLine.Children.Add(feedback); footerMessage.Children.Add(readyLine);
+        var trayHint = Text("Closing the launcher keeps it in the notification area.", 13, "#AAB6CC"); trayHint.Margin = new Thickness(30,0,0,0); footerMessage.Children.Add(trayHint);
+        updates = new UpdatesPanel(settings, preview, () => !batchLaunching && starting.Count == 0,
+            () => { AllowExit = true; Close(); System.Windows.Application.Current.Shutdown(); }, compact: true);
+        var updateSummary = updates.CreateSummary(); updateSummary.MaxWidth = 300;
+        DockPanel.SetDock(updateSummary, Dock.Right); footerLine.Children.Add(updateSummary); footerLine.Children.Add(footerMessage);
+        footer.Children.Add(footerLine);
+        footer.Children.Add(updates);
+        Grid.SetRow(footer,5); shell.Children.Add(footer); Content = shell;
         RenderCards(); Refresh();
         if (!preview)
         {
@@ -331,14 +412,25 @@ public sealed class LauncherWindow : Window
         Closing += (_, e) => { if (!AllowExit) { e.Cancel = true; Hide(); } else { timer.Stop(); tray?.Dispose(); trayIcon?.Dispose(); } };
     }
     public void Reveal() { Show(); WindowState = WindowState.Normal; Activate(); }
+    internal void ShowSettings() => updates.ShowSettings(this);
     void Say(string message, bool error = false) { feedback.Text = message; feedback.Foreground = Brush(error ? "#FFB4A6" : "#AAB6CC"); }
     void RenderCards()
     {
         cards.Children.Clear(); rows.Clear(); selections.Clear();
+        if (settings.Profiles.Count == 0)
+        {
+            var empty = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20) };
+            empty.Children.Add(Text("Add your first instance", 22));
+            var hint = Text("Create a profile for each game window you want to launch.", 13, "#AAB6CC");
+            hint.Margin = new Thickness(0,8,0,18); empty.Children.Add(hint);
+            empty.Children.Add(Button("+ Add instance", AddProfile, true));
+            cards.Children.Add(Panel(empty));
+        }
         foreach (var profile in settings.Profiles.OrderBy(p => p.Slot))
         {
             var row = new Grid(); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(54) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1,GridUnitType.Star) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(125) }); row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.ColumnDefinitions[0].Width = new GridLength(84);
+            row.ColumnDefinitions[0].Width = new GridLength(140);
+            row.ColumnDefinitions[2].Width = new GridLength(230);
             var select = new CheckBox { IsChecked = selected.Contains(profile.Slot), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,12,0), ToolTip = "Select Instance " + profile.Slot };
             System.Windows.Automation.AutomationProperties.SetName(select, "Select Instance " + profile.Slot);
             select.Checked += (_, _) => Select(profile.Slot, true);
@@ -346,23 +438,42 @@ public sealed class LauncherWindow : Window
             selections[profile.Slot] = select;
             var identifier = new StackPanel { Orientation = Orientation.Horizontal };
             identifier.Children.Add(select);
-            var number = Text(profile.Slot.ToString("00"), 23, "#8BE6CB"); number.FontWeight = FontWeights.SemiBold; identifier.Children.Add(number); row.Children.Add(identifier);
+            var number = Text(profile.Slot.ToString("00"), 17, "#08251C"); number.FontWeight = FontWeights.Bold; number.HorizontalAlignment = HorizontalAlignment.Center;
+            identifier.Children.Add(new Border { Child = number, Width = 42, Height = 34, CornerRadius = new CornerRadius(8), Background = LauncherTheme.Surface("#85FFC0", "#62EEA4"), VerticalAlignment = VerticalAlignment.Center });
+            identifier.Children.Add(new Border { Width = 1, Height = 38, Background = Brush("#687C97"), Margin = new Thickness(24,0,20,0), VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(identifier);
             var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,12,0) };
-            var name = Text(string.IsNullOrWhiteSpace(profile.Name) ? "Instance " + profile.Slot : profile.Name, 17); name.FontWeight = FontWeights.SemiBold; identity.Children.Add(name);
-            var detail = string.IsNullOrWhiteSpace(profile.Account) ? "No account label yet" : profile.Account;
+            var name = Text(string.IsNullOrWhiteSpace(profile.Name) ? "Instance " + profile.Slot : profile.Name, 19); name.FontWeight = FontWeights.Bold; identity.Children.Add(name);
+            var detail = string.IsNullOrWhiteSpace(profile.Account) ? "Add a name with Edit" : profile.Account;
             if (!string.IsNullOrWhiteSpace(profile.Server)) detail += "  �  " + profile.Server;
-            identity.Children.Add(Text(detail,12,"#AAB6CC"));
+            identity.Children.Add(Text(detail,15,"#BDCAE1"));
             Grid.SetColumn(identity,1); row.Children.Add(identity);
             var state = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            var status = Text("Stopped",12,"#AAB6CC"); var usage = Text("Ready to launch",11,"#8D9DB7"); usage.Margin = new Thickness(0,5,0,0); state.Children.Add(status); state.Children.Add(usage); Grid.SetColumn(state,2); row.Children.Add(state);
+            var status = Text("Not running",16,"#BDCAE1"); status.FontWeight = FontWeights.SemiBold;
+            var usage = Text("",14,"#AAB6CC"); usage.Margin = new Thickness(23,2,0,0); state.Children.Add(status); state.Children.Add(usage); Grid.SetColumn(state,2); row.Children.Add(state);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             var edit = Button("Edit", () => Edit(profile));
-            var focus = Button("Show", () => Focus(profile)); var stop = Button("Close", () => { _ = Stop(profile); });
+            var focus = Button("Show game", () => Focus(profile), true);
+            var stop = new MenuItem { Header = "Close game" };
+            stop.Click += (_, _) => { _ = Stop(profile); };
             var launch = Button("Launch", () => { _ = Launch(profile.Slot); }, true);
-            actions.Children.Add(Button("Delete", () => DeleteProfile(profile)));
-            actions.Children.Add(edit); actions.Children.Add(focus); actions.Children.Add(stop); actions.Children.Add(launch); Grid.SetColumn(actions,3); row.Children.Add(actions);
+            var remove = new MenuItem { Header = "Remove profile" };
+            remove.Click += (_, _) => DeleteProfile(profile);
+            remove.ToolTip = "Remove saved labels. Game files and running games are kept.";
+            edit.ToolTip = "Change the name, account label, or character note.";
+            focus.ToolTip = "Bring this game window to the front.";
+            stop.ToolTip = "Ask this game window to close.";
+            var menu = new ContextMenu(); menu.Items.Add(stop); menu.Items.Add(new Separator()); menu.Items.Add(remove);
+            var more = Button("\u22ef", () => { }); more.FontSize = 18; more.ToolTip = "More actions for Instance " + profile.Slot;
+            System.Windows.Automation.AutomationProperties.SetName(more, "More actions for Instance " + profile.Slot);
+            more.ContextMenu = menu; menu.PlacementTarget = more; menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            more.Click += (_, _) => menu.IsOpen = true;
+            focus.MinWidth = launch.MinWidth = 152; edit.MinWidth = 95;
+            more.Width = 42; more.Padding = new Thickness(0);
+            actions.Children.Add(focus); actions.Children.Add(launch); actions.Children.Add(edit); actions.Children.Add(more);
+            Grid.SetColumn(actions,3); row.Children.Add(actions);
             rows[profile.Slot] = (status,usage,launch,focus,stop);
-            var card = Panel(row); card.Margin = new Thickness(0,0,0,10); cards.Children.Add(card);
+            var card = Panel(row, padding: 12); card.Margin = new Thickness(0,0,0,10); cards.Children.Add(card);
         }
         UpdateSelection();
     }
@@ -458,8 +569,14 @@ public sealed class LauncherWindow : Window
     }
     void Refresh()
     {
+        var folderReady = File.Exists(Path.Combine(settings.GameFolder, "ro_win.exe")) && Directory.Exists(Path.Combine(settings.GameFolder, "ro_win_Data"));
+        folderLabel.Text = folderReady ? "Game folder ready" : "Choose game folder";
+        folderDot.Foreground = Brush(folderReady ? "#74F8B0" : "#EBCB8B");
+        folderStatus.Text = settings.GameFolder;
+        folderStatus.ToolTip = settings.GameFolder;
+        folderStatus.Foreground = Brush(folderReady ? "#BDCAE1" : "#EBCB8B");
         var (cpu,memory) = Native.ReadUsage();
-        cpuValue.Text = double.IsNaN(cpu) ? "Measuring." : $"{cpu:F0}%";
+        cpuValue.Text = double.IsNaN(cpu) ? "\u2014" : $"{cpu:F0}%";
         ramValue.Text = $"{memory.AvailablePhysical / 1073741824.0:F1} GB";
         commitValue.Text = $"{memory.AvailablePageFile / 1073741824.0:F1} GB";
         commitValue.Foreground = Brush(memory.AvailablePageFile < 5UL * 1024 * 1024 * 1024 ? "#EBCB8B" : "#F4F7FC");
@@ -472,11 +589,12 @@ public sealed class LauncherWindow : Window
             var isPending = pending.TryGetValue(profile.Slot, out var since) && DateTime.UtcNow - since < TimeSpan.FromSeconds(45);
             if (processes.Count > 0) { running++; pending.Remove(profile.Slot); }
             else if (pending.ContainsKey(profile.Slot) && !isPending) { pending.Remove(profile.Slot); Say($"Instance {profile.Slot} did not appear. Check the game message before trying again.",true); }
-            row.Status.Text = processes.Count > 0 ? "? Running" : isPending || starting.Contains(profile.Slot) ? "Starting." : "	 Stopped";
-            row.Status.Foreground = Brush(processes.Count > 0 ? "#8BE6CB" : "#AAB6CC");
-            row.Usage.Text = processes.Count > 0 ? $"{processes.Sum(p => SafeWorkingSet(p)) / 1073741824.0:F1} GB in RAM" : isPending ? "Waiting for window" : "Ready to launch";
+            row.Status.Text = stopping.Contains(profile.Slot) ? "Closing..." : processes.Count > 0 ? "\u25cf  Running" : isPending || starting.Contains(profile.Slot) ? "Starting..." : "\u25cf  Not running";
+            row.Status.Foreground = Brush(processes.Count > 0 ? "#74F8B0" : "#BDCAE1");
+            row.Usage.Text = processes.Count > 0 ? $"{processes.Sum(p => SafeWorkingSet(p)) / 1073741824.0:F1} GB RAM" : isPending ? "Waiting for window" : "";
+            row.Usage.Visibility = string.IsNullOrEmpty(row.Usage.Text) ? Visibility.Collapsed : Visibility.Visible;
             row.Stop.IsEnabled = !stopping.Contains(profile.Slot);
-            row.Stop.Content = stopping.Contains(profile.Slot) ? "Closing..." : "Close";
+            row.Stop.Header = stopping.Contains(profile.Slot) ? "Closing..." : "Close game";
             row.Launch.Visibility = !stopping.Contains(profile.Slot) && !batchLaunching && processes.Count == 0 && !isPending && !starting.Contains(profile.Slot) ? Visibility.Visible : Visibility.Collapsed;
             row.Focus.Visibility = row.Stop.Visibility = processes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var process in processes)
@@ -604,7 +722,7 @@ public sealed class LauncherWindow : Window
         var editor = new ProfileEditor(profile) { Owner = this };
         if (editor.ShowDialog() != true) return;
         settings.Profiles.Add(profile);
-        try { Store.Save(settings); RenderCards(); Refresh(); Say($"Instance {next} saved. Its small EXE and shared-data link will be prepared on first launch."); }
+        try { Store.Save(settings); RenderCards(); Refresh(); Say($"Instance {next} saved. Select Launch when you are ready to open the game."); }
         catch (Exception e) { settings.Profiles.Remove(profile); MessageBox.Show(this,e.Message,"Could not add profile"); }
     }
     void ChooseFolder()
