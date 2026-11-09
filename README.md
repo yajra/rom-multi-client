@@ -10,7 +10,8 @@ Releases include `SHA256SUMS.txt` for verifying the download with PowerShell's `
 
 ## Features
 
-- Detect existing instances and launch, show, or request a normal close.
+- Detect existing instances and launch, show, or close them, with an optional force close if normal exit does not finish.
+- Delete saved instances without removing game files or stopping running games.
 - Save a profile name, account label/email, and server or character note per instance.
 - Apply instance-specific window titles, including the saved profile name.
 - Show CPU load, available RAM, and remaining Windows memory commitment capacity.
@@ -84,6 +85,10 @@ Output is in `artifacts\dist`. The development build and currently running launc
 
 Open **RO Eternal Love Launcher** from the desktop. Use **Edit** to name each account, **Launch** to start it, **Show** to bring its window forward, and **Close** to request a normal game exit. **Add instance** saves a new profile without immediately starting another game. The application supports up to 12 profiles; available hardware determines how many can run well.
 
+**Close** brings the game forward for any exit confirmation and waits up to five seconds. If it stays open, you can choose to force close it; unsaved progress may be lost. Errors appear in the launcher's status message.
+
+Use **Delete** to remove an instance and its saved labels after confirmation. Game files and running games are kept. Other instance numbers stay the same, and **Add instance** reuses the first available number. You can delete all profiles. Wait for a launch queue or that instance's launch/close operation to finish before deleting it.
+
 Check the instances you want, or use **Check all**, then click **Launch selected**. Clicking Check all again clears the selection. The launcher starts the selected instances in number order with a short pause between them and skips games already running or starting. A failed launch or declined memory warning stops the remaining queue. Selection changes during a launch apply to the next batch. Selections remain while the launcher is open and reset when it exits.
 
 Use **Game folder** if your installation is elsewhere. The initial default is `C:\Program Files (x86)\XD\ROLauncher`. The original data folder stays shared. The launcher does not overwrite unrelated existing data directories.
@@ -114,11 +119,11 @@ Personal state remains outside this repository at `%LOCALAPPDATA%\ROInstanceLaun
 | --- | --- |
 | `profiles.json` | Saved game path and account profiles |
 | `profiles.json.bak` | Previous successful profile save |
-| `self-test.txt` | Latest test report |
-| `Tests\profiles.json` | Synthetic test data only |
 | `ShortcutBackups\` | Backups from shortcut migration |
 
 No game assets, credentials, or personal profile files are committed. Existing profiles from the earlier local launcher are reused automatically.
+
+Self-tests store their report (`self-test.txt`) and synthetic profiles under `%TEMP%\ROInstanceLaunchers-SelfTest`, separate from personal app data.
 
 ## Development and validation
 
@@ -137,4 +142,4 @@ Instance shortcuts call `--launch N`. If the launcher is already running, a curr
 
 ## Branding
 
-The launcher uses the icon embedded in the installed Ragnarok M: Eternal Love client, including its original 16–256 pixel sizes. This is a community launcher utility. The game name and client artwork belong to their respective owners. Executable filenames and the saved-profile location remain compatible with earlier releases.
+The launcher uses the icon embedded in the installed Ragnarok M: Eternal Love client, including its original 16-256 pixel sizes. This is a community launcher utility. The game name and client artwork belong to their respective owners. Executable filenames and the saved-profile location remain compatible with earlier releases.

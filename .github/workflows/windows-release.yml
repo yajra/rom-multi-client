@@ -44,7 +44,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          $report = Join-Path $env:LOCALAPPDATA 'ROInstanceLaunchers\self-test.txt'
+          $report = Join-Path ([System.IO.Path]::GetTempPath()) 'ROInstanceLaunchers-SelfTest\self-test.txt'
           if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY }
 
   release-please:

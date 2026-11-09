@@ -10,6 +10,6 @@ if (-not $testProcess.WaitForExit(60000)) {
     throw 'Self-tests did not finish within 60 seconds.'
 }
 $testProcess.Refresh()
-$reportPath = Join-Path $env:LOCALAPPDATA 'ROInstanceLaunchers\self-test.txt'
+$reportPath = Join-Path ([System.IO.Path]::GetTempPath()) 'ROInstanceLaunchers-SelfTest\self-test.txt'
 if (Test-Path -LiteralPath $reportPath) { Get-Content -LiteralPath $reportPath }
 if ($testProcess.ExitCode -ne 0) { throw "Tests failed with exit code $($testProcess.ExitCode)." }

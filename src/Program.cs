@@ -59,7 +59,9 @@ public sealed class Settings
 
 public static class Store
 {
-    public static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ROInstanceLaunchers");
+    public static readonly string Root = Environment.GetCommandLineArgs().Contains("--self-test")
+        ? Path.Combine(Path.GetTempPath(), "ROInstanceLaunchers-SelfTest")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ROInstanceLaunchers");
     public static readonly string FilePath = Path.Combine(Root, "profiles.json");
     public static Settings Load(string? filePath = null)
     {
@@ -71,7 +73,7 @@ public static class Store
     }
     public static void Validate(Settings settings)
     {
-        if (settings.Profiles.Count == 0 || settings.Profiles.Any(p => p.Slot < 1 || p.Slot > 12) || settings.Profiles.Select(p => p.Slot).Distinct().Count() != settings.Profiles.Count)
+        if (settings.Profiles.Any(p => p.Slot < 1 || p.Slot > 12) || settings.Profiles.Select(p => p.Slot).Distinct().Count() != settings.Profiles.Count)
             throw new InvalidDataException("Profiles must have unique instance numbers from 1 to 12.");
         if (settings.Profiles.Any(p => p.Name == null || p.Account == null || p.Server == null))
             throw new InvalidDataException("A profile contains an invalid empty field.");
@@ -240,14 +242,15 @@ public sealed class LauncherWindow : Window
     readonly Settings settings;
     readonly bool preview;
     readonly StackPanel cards = new();
-    readonly TextBlock cpuValue = Text("Measuring…", 22, "#F4F7FC");
-    readonly TextBlock ramValue = Text("—", 22, "#F4F7FC");
-    readonly TextBlock commitValue = Text("—", 22, "#F4F7FC");
-    readonly TextBlock countValue = Text("—", 22, "#F4F7FC");
+    readonly TextBlock cpuValue = Text("Measuring.", 22, "#F4F7FC");
+    readonly TextBlock ramValue = Text("-", 22, "#F4F7FC");
+    readonly TextBlock commitValue = Text("-", 22, "#F4F7FC");
+    readonly TextBlock countValue = Text("-", 22, "#F4F7FC");
     readonly TextBlock feedback = Text("Ready. Your existing game windows stay open.", 12, "#AAB6CC");
     readonly Dictionary<int, (TextBlock Status, TextBlock Usage, Button Launch, Button Focus, Button Stop)> rows = new();
     readonly Dictionary<int, DateTime> pending = new();
     readonly HashSet<int> starting = new();
+    readonly HashSet<int> stopping = new();
     readonly HashSet<int> selected = new();
     readonly Dictionary<int, CheckBox> selections = new();
     readonly CheckBox checkAll = new() { Content = "Check all", Foreground = Brush("#E9EFFA"), VerticalAlignment = VerticalAlignment.Center, FontSize = 13 };
@@ -347,15 +350,16 @@ public sealed class LauncherWindow : Window
             var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,12,0) };
             var name = Text(string.IsNullOrWhiteSpace(profile.Name) ? "Instance " + profile.Slot : profile.Name, 17); name.FontWeight = FontWeights.SemiBold; identity.Children.Add(name);
             var detail = string.IsNullOrWhiteSpace(profile.Account) ? "No account label yet" : profile.Account;
-            if (!string.IsNullOrWhiteSpace(profile.Server)) detail += "  ·  " + profile.Server;
+            if (!string.IsNullOrWhiteSpace(profile.Server)) detail += "  �  " + profile.Server;
             identity.Children.Add(Text(detail,12,"#AAB6CC"));
             Grid.SetColumn(identity,1); row.Children.Add(identity);
             var state = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             var status = Text("Stopped",12,"#AAB6CC"); var usage = Text("Ready to launch",11,"#8D9DB7"); usage.Margin = new Thickness(0,5,0,0); state.Children.Add(status); state.Children.Add(usage); Grid.SetColumn(state,2); row.Children.Add(state);
             var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             var edit = Button("Edit", () => Edit(profile));
-            var focus = Button("Show", () => Focus(profile)); var stop = Button("Close", () => Stop(profile));
+            var focus = Button("Show", () => Focus(profile)); var stop = Button("Close", () => { _ = Stop(profile); });
             var launch = Button("Launch", () => { _ = Launch(profile.Slot); }, true);
+            actions.Children.Add(Button("Delete", () => DeleteProfile(profile)));
             actions.Children.Add(edit); actions.Children.Add(focus); actions.Children.Add(stop); actions.Children.Add(launch); Grid.SetColumn(actions,3); row.Children.Add(actions);
             rows[profile.Slot] = (status,usage,launch,focus,stop);
             var card = Panel(row); card.Margin = new Thickness(0,0,0,10); cards.Children.Add(card);
@@ -376,7 +380,7 @@ public sealed class LauncherWindow : Window
     void UpdateSelection()
     {
         checkAll.IsChecked = selected.Count == 0 ? false : selected.Count == settings.Profiles.Count ? true : null;
-        selectionCount.Text = selected.Count == 0 ? "Select instances to launch together" : $"{selected.Count} selected · running instances are skipped";
+        selectionCount.Text = selected.Count == 0 ? "Select instances to launch together" : $"{selected.Count} selected � running instances are skipped";
         launchSelected.Content = $"Launch selected ({selected.Count})";
         launchSelected.Visibility = selected.Count > 0 && !batchLaunching ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -389,7 +393,7 @@ public sealed class LauncherWindow : Window
         {
             for (var i = 0; i < slots.Length; i++)
             {
-                Say($"Launching selection {i + 1} of {slots.Length} · Instance {slots[i]}…");
+                Say($"Launching selection {i + 1} of {slots.Length} � Instance {slots[i]}.");
                 if (!await (launch?.Invoke(slots[i]) ?? Launch(slots[i], true)))
                 {
                     Say($"Stopped the launch queue at Instance {slots[i]}. Remaining instances were not launched.", true);
@@ -431,13 +435,31 @@ public sealed class LauncherWindow : Window
             launched.Clear();
             window.LaunchSelected(slot => { launched.Add(slot); return Task.FromResult(false); }, 0).GetAwaiter().GetResult();
             check(launched.SequenceEqual(new[] { 1 }) && !window.batchLaunching && window.launchSelected.Visibility == Visibility.Visible, "cancelled launch stops queue and restores controls");
+            var profile = window.settings.Profiles[0];
+            try { window.RemoveProfile(profile, _ => throw new IOException("Test save failure")); }
+            catch (IOException) { }
+            check(window.settings.Profiles[0] == profile && window.selected.Contains(profile.Slot), "failed deletion preserves profile order and selection");
+            window.stopping.Add(profile.Slot);
+            bool blocked = false;
+            try { window.RemoveProfile(profile, _ => { }); }
+            catch (InvalidOperationException) { blocked = true; }
+            check(blocked && window.settings.Profiles.Contains(profile), "deletion blocked during close");
+            window.stopping.Clear();
+            window.Stop(profile).GetAwaiter().GetResult();
+            check(!window.stopping.Contains(profile.Slot) && window.feedback.Text.Contains("already stopped"), "close of stopped instance reports result and resets controls");
+            var deletionFile = Path.Combine(Store.Root, "Tests", "deleted-profiles.json");
+            window.RemoveProfile(profile, value => Store.Save(value, deletionFile));
+            check(Store.Load(deletionFile).Profiles.Select(p => p.Slot).SequenceEqual(new[] { 2, 3 }) && !window.selected.Contains(1) && !window.rows.ContainsKey(1), "deletion persists without renumbering and clears selection and card");
+            foreach (var remaining in window.settings.Profiles.ToArray())
+                window.RemoveProfile(remaining, value => Store.Save(value, deletionFile));
+            check(Store.Load(deletionFile).Profiles.Count == 0 && window.rows.Count == 0, "last instance can be deleted and empty profiles reload");
         }
         finally { window.AllowExit = true; window.Close(); }
     }
     void Refresh()
     {
         var (cpu,memory) = Native.ReadUsage();
-        cpuValue.Text = double.IsNaN(cpu) ? "Measuring…" : $"{cpu:F0}%";
+        cpuValue.Text = double.IsNaN(cpu) ? "Measuring." : $"{cpu:F0}%";
         ramValue.Text = $"{memory.AvailablePhysical / 1073741824.0:F1} GB";
         commitValue.Text = $"{memory.AvailablePageFile / 1073741824.0:F1} GB";
         commitValue.Foreground = Brush(memory.AvailablePageFile < 5UL * 1024 * 1024 * 1024 ? "#EBCB8B" : "#F4F7FC");
@@ -450,10 +472,12 @@ public sealed class LauncherWindow : Window
             var isPending = pending.TryGetValue(profile.Slot, out var since) && DateTime.UtcNow - since < TimeSpan.FromSeconds(45);
             if (processes.Count > 0) { running++; pending.Remove(profile.Slot); }
             else if (pending.ContainsKey(profile.Slot) && !isPending) { pending.Remove(profile.Slot); Say($"Instance {profile.Slot} did not appear. Check the game message before trying again.",true); }
-            row.Status.Text = processes.Count > 0 ? "● Running" : isPending || starting.Contains(profile.Slot) ? "Starting…" : "○ Stopped";
+            row.Status.Text = processes.Count > 0 ? "? Running" : isPending || starting.Contains(profile.Slot) ? "Starting." : "	 Stopped";
             row.Status.Foreground = Brush(processes.Count > 0 ? "#8BE6CB" : "#AAB6CC");
             row.Usage.Text = processes.Count > 0 ? $"{processes.Sum(p => SafeWorkingSet(p)) / 1073741824.0:F1} GB in RAM" : isPending ? "Waiting for window" : "Ready to launch";
-            row.Launch.Visibility = !batchLaunching && processes.Count == 0 && !isPending && !starting.Contains(profile.Slot) ? Visibility.Visible : Visibility.Collapsed;
+            row.Stop.IsEnabled = !stopping.Contains(profile.Slot);
+            row.Stop.Content = stopping.Contains(profile.Slot) ? "Closing..." : "Close";
+            row.Launch.Visibility = !stopping.Contains(profile.Slot) && !batchLaunching && processes.Count == 0 && !isPending && !starting.Contains(profile.Slot) ? Visibility.Visible : Visibility.Collapsed;
             row.Focus.Visibility = row.Stop.Visibility = processes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             foreach (var process in processes)
             {
@@ -469,6 +493,7 @@ public sealed class LauncherWindow : Window
         if (batchLaunching && !fromBatch) return false;
         var profile = settings.Profiles.FirstOrDefault(p => p.Slot == slot);
         if (profile == null) { Say("That instance is not in your saved profiles.",true); return false; }
+        if (stopping.Contains(slot)) return false;
         if (starting.Contains(slot) || pending.ContainsKey(slot)) return true;
         var existing = Game.Find(profile,settings.GameFolder);
         if (existing.Count > 0) { existing.ForEach(p => p.Dispose()); if (!fromBatch) Focus(profile); return true; }
@@ -476,7 +501,7 @@ public sealed class LauncherWindow : Window
         try
         {
             var usage = Native.ReadUsage().Memory;
-            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another Eternal Love instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return false;
+            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another Eternal Love instance may need 3-5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return false;
             var start = Game.StartInfo(profile,settings.GameFolder);
             await Task.Run(() => Game.EnsureFiles(profile,settings.GameFolder));
             var process = Process.Start(start) ?? throw new IOException("Windows could not start this instance.");
@@ -492,10 +517,76 @@ public sealed class LauncherWindow : Window
     {
         foreach (var p in Game.Find(profile,settings.GameFolder)) { try { if (p.MainWindowHandle != IntPtr.Zero) { Native.ShowWindow(p.MainWindowHandle,9); Native.SetForegroundWindow(p.MainWindowHandle); } } finally { p.Dispose(); } }
     }
-    void Stop(Profile profile)
+    async Task Stop(Profile profile)
     {
-        foreach (var p in Game.Find(profile,settings.GameFolder)) { try { p.CloseMainWindow(); } finally { p.Dispose(); } }
-        Say($"Asked Instance {profile.Slot} to close normally. Any game confirmation remains in its window.");
+        if (!stopping.Add(profile.Slot)) return;
+        var processes = new List<Process>();
+        try
+        {
+            processes = Game.Find(profile, settings.GameFolder);
+            Refresh();
+            if (processes.Count == 0) { Say($"Instance {profile.Slot} is already stopped."); return; }
+            foreach (var process in processes)
+            {
+                try
+                {
+                    if (process.HasExited) continue;
+                    process.CloseMainWindow();
+                    if (process.MainWindowHandle != IntPtr.Zero)
+                    {
+                        Native.ShowWindow(process.MainWindowHandle, 9);
+                        Native.SetForegroundWindow(process.MainWindowHandle);
+                    }
+                }
+                catch (InvalidOperationException) when (process.HasExited) { }
+            }
+            Say($"Waiting for Instance {profile.Slot} to close. Confirm any exit prompt in the game.");
+            await Task.WhenAll(processes.Select(p => Task.Run(() => p.WaitForExit(5000))));
+            var remaining = processes.Where(p => !p.HasExited).ToArray();
+            if (remaining.Length > 0)
+            {
+                if (MessageBox.Show(this, $"Instance {profile.Slot} is still running. Force close it?\n\nUnsaved game progress may be lost.",
+                    "Force close instance?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                { Say($"Instance {profile.Slot} is still running. Close was not forced."); return; }
+                foreach (var process in remaining)
+                {
+                    try { if (!process.HasExited) process.Kill(); }
+                    catch (InvalidOperationException) when (process.HasExited) { }
+                }
+                await Task.WhenAll(remaining.Select(p => Task.Run(() => p.WaitForExit(5000))));
+            }
+            Say(processes.All(p => p.HasExited) ? $"Instance {profile.Slot} closed." : $"Instance {profile.Slot} is still closing.");
+        }
+        catch (Exception e) { Say($"Could not close Instance {profile.Slot}: {e.Message}", true); }
+        finally
+        {
+            foreach (var process in processes) process.Dispose();
+            stopping.Remove(profile.Slot);
+            Refresh();
+        }
+    }
+    bool RemoveProfile(Profile profile, Action<Settings> save)
+    {
+        if (batchLaunching || starting.Contains(profile.Slot) || pending.ContainsKey(profile.Slot) || stopping.Contains(profile.Slot))
+            throw new InvalidOperationException("Wait for the current launch or close operation before deleting this instance.");
+        var index = settings.Profiles.IndexOf(profile);
+        if (index < 0) return false;
+        settings.Profiles.RemoveAt(index);
+        try { save(settings); }
+        catch { settings.Profiles.Insert(index, profile); throw; }
+        selected.Remove(profile.Slot);
+        RenderCards(); Refresh();
+        return true;
+    }
+    void DeleteProfile(Profile profile)
+    {
+        if (MessageBox.Show(this, $"Delete Instance {profile.Slot} from the launcher?\n\nIts saved labels will be removed. Game files and any running game will be kept.",
+            "Delete instance?", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        try
+        {
+            if (RemoveProfile(profile, value => Store.Save(value))) Say($"Deleted Instance {profile.Slot}. Game files and running games were kept.");
+        }
+        catch (Exception e) { Say(e.Message, true); }
     }
     void Edit(Profile profile)
     {
@@ -533,7 +624,7 @@ public sealed class ProfileEditor : Window
 {
     public ProfileEditor(Profile profile)
     {
-        Title = "Eternal Love · Edit Instance " + profile.Slot; Icon = Branding.Icon; Width = 520; Height = 490; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Title = "Eternal Love � Edit Instance " + profile.Slot; Icon = Branding.Icon; Width = 520; Height = 490; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(13,22,38)); FontFamily = new FontFamily("Segoe UI");
         var panel = new StackPanel { Margin = new Thickness(28) };
         panel.Children.Add(LauncherWindow.Text("Instance " + profile.Slot,24));
@@ -542,9 +633,9 @@ public sealed class ProfileEditor : Window
             var text = LauncherWindow.Text(label,12,"#AAB6CC"); text.Margin = new Thickness(0,16,0,6); panel.Children.Add(text);
             var box = new TextBox { Text = value, FontSize = 14, Padding = new Thickness(9), MaxLength = 80 }; panel.Children.Add(box); return box;
         }
-        var name = Field("Profile name  ·  appears in the game title",profile.Name);
-        var account = Field("Account label or email  ·  optional",profile.Account);
-        var server = Field("Server / character note  ·  optional",profile.Server);
+        var name = Field("Profile name  �  appears in the game title",profile.Name);
+        var account = Field("Account label or email  �  optional",profile.Account);
+        var server = Field("Server / character note  �  optional",profile.Server);
         var hint = LauncherWindow.Text("Labels are saved on this PC and do not switch accounts. Enter passwords only in the game.",12,"#AAB6CC"); hint.Margin = new Thickness(0,16,0,16); panel.Children.Add(hint);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(18,9,18,9), Margin = new Thickness(0,0,8,0), IsCancel = true }; buttons.Children.Add(cancel);
