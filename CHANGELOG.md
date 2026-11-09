@@ -2,6 +2,13 @@
 
 Release Please maintains new entries from Conventional Commits. Versions follow Semantic Versioning. Historical releases below were recorded before automation.
 
+## [1.5.0](https://github.com/yajra/rom-multi-client/compare/v1.4.0...v1.5.0) (2026-11-09)
+
+
+### Features
+
+* **ui:** apply approved launcher design and modal settings ([f6f8240](https://github.com/yajra/rom-multi-client/commit/f6f82400f082152869e224e3dd57129882809d6c))
+
 ## [1.4.0](https://github.com/yajra/ROInstanceLauncher/compare/v1.3.0...v1.4.0) (2026-11-09)
 
 
