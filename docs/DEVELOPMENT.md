@@ -59,9 +59,11 @@ Output is in `artifacts\dist`. The development build and currently running launc
 
 ## Development and validation
 
-`src\Program.cs` contains the native WPF UI, profile persistence, process controls, resource metrics, and self-tests. `src\ROInstances.csproj` defines the .NET Windows app. There are no third-party NuGet dependencies.
+`src\Program.cs` contains the native WPF UI, profile persistence, process controls, resource metrics, and self-tests. `src\ROInstances.csproj` defines the .NET Windows app. `BrowserRequestRelay.cs` uses Microsoft's TraceEvent package to relay URL requests from verified managed game processes through `rundll32 url.dll,FileProtocolHandler` or `OpenWith.exe`. The elevated helper only observes process-start events; the unelevated launcher opens URLs through the current user's Windows shell. Pipe endpoints verify both peer process IDs, and the helper requires the same Windows identity and executable as its owner. Events are processed in memory without an ETL file; unrelated command lines are not read by the event callback. The helper ends when its owner or pipe exits.
 
 The self-tests cover instance mapping, titles, JSON round trips, duplicate profile rejection, direct launch targets, migration of older profiles, system metrics, atomic saving and backup recovery, and the actual profile editor Save/Cancel interactions. They do not launch or stop game processes or authenticate accounts.
+
+`SignInBrowser.cs` opens URLs through the current user's Windows default association and finds an existing browser window by executable path and Windows SID. Focus retries stop after twenty attempts or if the user switches to another window. Never use `AttachThreadInput` here: sharing input queues can make foreground activation block on the game or browser. Windows may decline the focus request. The `--check-browser-focus` diagnostic opens a harmless example.com page and writes its foreground-window result to `%TEMP%\ROInstanceLauncher-browser-focus.txt`.
 
 Optional layout previews:
 
@@ -73,3 +75,19 @@ Optional layout previews:
 
 Instance shortcuts call `--launch N`. If the launcher is already running, a current-user named pipe forwards the request to it. If that game is already running, the launcher brings it forward instead of starting a duplicate.
 
+
+## ROM startup settings
+
+Each profile persists an immutable `GameLaunchSettings` value with display, graphics, and FPS choices. Missing fields in older profiles default to windowed 540p, low graphics, and low FPS. Invalid enum values and null settings are rejected. The editor replaces this value only on Save; an in-progress launch retains its settings snapshot.
+
+`GameDisplay` applies these choices to the target Windows user's loaded registry before starting ROM. Normal-user launches use the same path. Hidden-user preparation receives only the settings JSON through `ProcessStartInfo.ArgumentList`; the helper validates it before writing. Fullscreen launches bypass the windowed-mode startup watcher.
+
+Client mappings were verified on 2026-11-10 against locally extracted `Game`, `FunctionPerformanceSetting`, and `SetViewEffectState` scripts from the installed client's patched `refactory.unity3d`, `functionsystem.unity3d`, and `framework.unity3d`. Extracted scripts remain outside the repository.
+
+- Display: ROM's first resolution entry is fullscreen. It then includes descending resolutions from 2160, 1440, 1080, 720, and 540 only when `height + 50 < desktopHeight`. Therefore 540p/720p PlayerPrefs indices vary with desktop height. The launcher queries the primary desktop's current mode with `EnumDisplaySettings` and computes the matching index. Windowed launches also pass explicit Unity dimensions; fullscreen leaves dimensions to ROM.
+- FPS: Low = 30 FPS (saved ID 1), Medium = 45 FPS (ID 3), High = 60 FPS (ID 2).
+- Graphics: Low/Medium/High use IDs 1/2/3. Baseline preset anti-aliasing values are 1/1/2; shadows and effects are 0/1/2; bloom and FXAA are false/true/true. Environment remains false. ROM can adapt graphics to hardware or map conditions at runtime.
+
+Preferences live under `HKCU\Software\X.D. Network Inc.\Ragnarok M`. `Setting_h2752851091` is UTF-8, NUL-terminated REG_BINARY containing Lua-style assignments. Only the graphics/FPS fields are merged; nested tables, audio, controls, and unrelated fields are preserved. Unsupported storage types or unbalanced settings fail before writing. The complete source profile is never copied.
+
+Self-tests cover JSON migration and round-trips, invalid options, all presets and independent graphics/FPS selection, desktop-dependent resolution indices, fullscreen flags, helper argument transport, all launch modes, and actual editor Save/Cancel interactions. Preview rendering verifies layout. Tests do not restart live games; end-to-end game verification occurs on the next launch.

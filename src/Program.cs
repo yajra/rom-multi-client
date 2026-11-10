@@ -46,6 +46,9 @@ public sealed class Profile
     public string Name { get; set; } = "";
     public string Account { get; set; } = "";
     public string Server { get; set; } = "";
+    public string WindowsUser { get; set; } = "";
+    public string LoginStorageId { get; set; } = "";
+    public GameLaunchSettings LaunchSettings { get; set; } = new();
     public string ProcessName => Slot == 1 ? "ro_win" : "ro_win" + (Slot - 1);
     public string Title => $"{Branding.GameName} - Instance {Slot}" + (string.IsNullOrWhiteSpace(Name) ? "" : " | " + Name);
 }
@@ -75,9 +78,16 @@ public static class Store
     {
         if (settings.Profiles.Any(p => p.Slot < 1 || p.Slot > 12) || settings.Profiles.Select(p => p.Slot).Distinct().Count() != settings.Profiles.Count)
             throw new InvalidDataException("Profiles must have unique instance numbers from 1 to 12.");
-        if (settings.Profiles.Any(p => p.Name == null || p.Account == null || p.Server == null))
+        if (settings.Profiles.Any(p => p.Name == null || p.Account == null || p.Server == null || p.LoginStorageId == null))
             throw new InvalidDataException("A profile contains an invalid empty field.");
+        if (settings.Profiles.Any(p => p.WindowsUser == null || (p.WindowsUser.Length > 0 && p.WindowsUser != p.ProcessName)))
+            throw new InvalidDataException("Windows users must match their instance executable names.");
         if (!Path.IsPathFullyQualified(settings.GameFolder)) throw new InvalidDataException("The game folder must be an absolute path.");
+        foreach (var profile in settings.Profiles)
+        {
+            if (profile.LaunchSettings == null) throw new InvalidDataException("An instance has missing launch settings.");
+            profile.LaunchSettings.Validate();
+        }
     }
     public static void Save(Settings settings, string? filePath = null)
     {
@@ -114,13 +124,27 @@ public static class Native
 
 public static class Game
 {
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, int id);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref int size);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    static string? ImagePath(Process process)
+    {
+        var handle = OpenProcess(0x1000, false, process.Id);
+        if (handle == IntPtr.Zero) return null;
+        try
+        {
+            var path = new StringBuilder(32768); var size = path.Capacity;
+            return QueryFullProcessImageName(handle, 0, path, ref size) ? path.ToString() : null;
+        }
+        finally { CloseHandle(handle); }
+    }
     public static List<Process> Find(Profile profile, string folder)
     {
         var expected = Path.GetFullPath(Path.Combine(folder, profile.ProcessName + ".exe"));
         var found = new List<Process>();
         foreach (var p in Process.GetProcessesByName(profile.ProcessName))
         {
-            try { if (string.Equals(p.MainModule?.FileName, expected, StringComparison.OrdinalIgnoreCase)) { found.Add(p); continue; } }
+            try { if (string.Equals(ImagePath(p), expected, StringComparison.OrdinalIgnoreCase)) { found.Add(p); continue; } }
             catch { }
             p.Dispose();
         }
@@ -154,10 +178,12 @@ public static class Game
         // Refresh the small launcher after game updates; caller guarantees this instance is stopped.
         File.Copy(original, executable, true);
     }
-    public static ProcessStartInfo StartInfo(Profile profile, string folder)
+    public static ProcessStartInfo StartInfo(Profile profile, string folder, bool useCurrentUser = false, GameLaunchSettings? options = null)
     {
         var game = Path.Combine(folder, profile.ProcessName + ".exe");
-        return new ProcessStartInfo(game) { WorkingDirectory = folder, UseShellExecute = true };
+        var start = new ProcessStartInfo(game) { WorkingDirectory = folder, UseShellExecute = true };
+        foreach (var argument in GameDisplay.ArgumentsFor(options ?? profile.LaunchSettings)) start.ArgumentList.Add(argument);
+        return profile.WindowsUser.Length == 0 || useCurrentUser ? start : InstanceAccounts.Configure(start, profile.WindowsUser);
     }
 }
 
@@ -166,6 +192,30 @@ public static class Program
     public static readonly string PipeName = "ROInstances_" + Environment.UserName;
     [STAThread] public static int Main(string[] args)
     {
+        StartupEnvironment.Initialize();
+        if (args.Length == 1 && args[0] == "--check-browser-focus")
+        {
+            var focused = SignInBrowser.Open("https://example.com/ro-launcher-focus-check").GetAwaiter().GetResult();
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "ROInstanceLauncher-browser-focus.txt"), focused ? "PASS: Default browser is the foreground window." : "FAIL: Default browser did not receive foreground focus.");
+            return focused ? 0 : 1;
+        }
+        if (args.Length == 3 && args[0] == "--browser-request-relay" && int.TryParse(args[1], out var relayOwner))
+            return BrowserRequestRelay.Run(relayOwner, args[2]);
+        if (args.Length == 3 && args[0] == "--open-sso-url") return LoginBrowser.Forward(args[1], args[2]);
+        if (args.Length == 1 && args[0] == "--probe-instance-user") return LoginDiagnostics.WriteIdentity();
+        if (args.Length == 1 && args[0] == "--prepare-windowed-user") return LoginDiagnostics.WriteIdentity(prepareWindowed: true);
+        if (args.Length == 2 && args[0] == "--prepare-game-user")
+        {
+            try
+            {
+                var options = JsonSerializer.Deserialize<GameLaunchSettings>(args[1]) ?? throw new InvalidDataException("Missing launch settings.");
+                options.Validate();
+                return LoginDiagnostics.WriteIdentity(prepareWindowed: true, options);
+            }
+            catch { return 1; }
+        }
+        if (args.Length == 2 && args[0] == "--verify-login-storage") return LoginDiagnostics.VerifyStorage(args[1]).GetAwaiter().GetResult();
+        if (args.Length == 3 && args[0] == "--setup-instance-user") return InstanceAccounts.Setup(args[1], args[2]);
         if (args.Length > 0 && args[0] == "--apply-update") return Updates.Apply(args);
         if (args.Length == 1 && args[0] == "--check-updates") return Updates.CommandLineAsync(false).GetAwaiter().GetResult();
         if (args.Length == 1 && args[0] == "--install-update")
@@ -189,6 +239,8 @@ public static class Program
             catch { MessageBox.Show("The launcher is already starting. Open it from the notification area in a moment.", Branding.AppName); }
             return 0;
         }
+        using var browserCancellation = new CancellationTokenSource();
+        if (!preview) _ = LoginBrowser.Listen(browserCancellation.Token);
         var app = new System.Windows.Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.DispatcherUnhandledException += (_, e) => { MessageBox.Show(e.Exception.Message, Branding.AppName); e.Handled = true; };
         try
@@ -238,7 +290,13 @@ public static class Program
             window.Show();
             app.Run();
         }
-        catch (Exception e) { MessageBox.Show(e.Message + "\n\nYour saved profiles have not been replaced.", Branding.AppName); return 1; }
+        catch (Exception e)
+        {
+            var log = Path.Combine(Path.GetTempPath(), "ROInstanceLauncher-startup-error.txt");
+            try { File.WriteAllText(log, e.ToString()); } catch { }
+            MessageBox.Show(e.GetBaseException().Message + "\n\nYour saved profiles have not been replaced.\nDetails: " + log, Branding.AppName);
+            return 1;
+        }
         return 0;
     }
     static void SavePreview(Window target, string path)
@@ -257,9 +315,9 @@ public sealed class LauncherWindow : Window
     readonly bool preview;
     readonly StackPanel cards = new();
     readonly TextBlock cpuValue = Text("\u2014", 22, "#F4F7FC");
-    readonly TextBlock ramValue = Text("-", 22, "#F4F7FC");
-    readonly TextBlock commitValue = Text("-", 22, "#F4F7FC");
-    readonly TextBlock countValue = Text("-", 22, "#F4F7FC");
+    readonly TextBlock ramValue = Text("—", 22, "#F4F7FC");
+    readonly TextBlock commitValue = Text("—", 22, "#F4F7FC");
+    readonly TextBlock countValue = Text("—", 22, "#F4F7FC");
     readonly TextBlock folderStatus = Text("", 12, "#AAB6CC");
     readonly TextBlock folderLabel = Text("", 16);
     readonly TextBlock folderDot = Text("\u25cf", 20, "#74F8B0");
@@ -445,7 +503,7 @@ public sealed class LauncherWindow : Window
             var identity = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0,0,12,0) };
             var name = Text(string.IsNullOrWhiteSpace(profile.Name) ? "Instance " + profile.Slot : profile.Name, 19); name.FontWeight = FontWeights.Bold; identity.Children.Add(name);
             var detail = string.IsNullOrWhiteSpace(profile.Account) ? "Add a name with Edit" : profile.Account;
-            if (!string.IsNullOrWhiteSpace(profile.Server)) detail += "  �  " + profile.Server;
+            if (!string.IsNullOrWhiteSpace(profile.Server)) detail += "  ·  " + profile.Server;
             identity.Children.Add(Text(detail,15,"#BDCAE1"));
             Grid.SetColumn(identity,1); row.Children.Add(identity);
             var state = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
@@ -491,7 +549,7 @@ public sealed class LauncherWindow : Window
     void UpdateSelection()
     {
         checkAll.IsChecked = selected.Count == 0 ? false : selected.Count == settings.Profiles.Count ? true : null;
-        selectionCount.Text = selected.Count == 0 ? "Select instances to launch together" : $"{selected.Count} selected � running instances are skipped";
+        selectionCount.Text = selected.Count == 0 ? "Select instances to launch together" : $"{selected.Count} selected · running instances are skipped";
         launchSelected.Content = $"Launch selected ({selected.Count})";
         launchSelected.Visibility = selected.Count > 0 && !batchLaunching ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -504,7 +562,7 @@ public sealed class LauncherWindow : Window
         {
             for (var i = 0; i < slots.Length; i++)
             {
-                Say($"Launching selection {i + 1} of {slots.Length} � Instance {slots[i]}.");
+                Say($"Launching selection {i + 1} of {slots.Length} · Instance {slots[i]}…");
                 if (!await (launch?.Invoke(slots[i]) ?? Launch(slots[i], true)))
                 {
                     Say($"Stopped the launch queue at Instance {slots[i]}. Remaining instances were not launched.", true);
@@ -606,7 +664,7 @@ public sealed class LauncherWindow : Window
         countValue.Text = $"{running} / {settings.Profiles.Count}";
     }
     static long SafeWorkingSet(Process p) { try { return p.WorkingSet64; } catch { return 0; } }
-    public async Task<bool> Launch(int slot, bool fromBatch = false)
+    public async Task<bool> Launch(int slot, bool fromBatch = false, bool useCurrentUser = false)
     {
         if (batchLaunching && !fromBatch) return false;
         var profile = settings.Profiles.FirstOrDefault(p => p.Slot == slot);
@@ -614,18 +672,69 @@ public sealed class LauncherWindow : Window
         if (stopping.Contains(slot)) return false;
         if (starting.Contains(slot) || pending.ContainsKey(slot)) return true;
         var existing = Game.Find(profile,settings.GameFolder);
-        if (existing.Count > 0) { existing.ForEach(p => p.Dispose()); if (!fromBatch) Focus(profile); return true; }
+        if (existing.Count > 0)
+        {
+            var expectedSid = useCurrentUser || profile.WindowsUser.Length == 0
+                ? System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value : LoginDiagnostics.ExpectedSid(profile.WindowsUser);
+            var matches = existing.All(p => LoginDiagnostics.ProcessSid(p.Id) == expectedSid);
+            existing.ForEach(p => p.Dispose());
+            if (!matches) { Say("This game is already running under a different or unverified Windows user. Close this game window completely, then Launch again. Its login has not been isolated.", true); return false; }
+            if (useCurrentUser) { Say("Close this game instance before launching it with your normal Windows login.", true); return false; }
+            if (profile.WindowsUser.Length > 0)
+            {
+                try { await BrowserRequestRelay.Ensure(settings.GameFolder); }
+                catch (Exception e) { Say(e.Message, true); return false; }
+            }
+            if (!fromBatch) Focus(profile);
+            if (profile.WindowsUser.Length == 0 && !useCurrentUser)
+                Say("This running instance still shares your Windows login. Close it, then Launch to set up its own remembered sign-in.", true);
+            return true;
+        }
         starting.Add(slot); Refresh();
         try
         {
             var usage = Native.ReadUsage().Memory;
-            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another Eternal Love instance may need 3-5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return false;
-            var start = Game.StartInfo(profile,settings.GameFolder);
+            if ((usage.AvailablePageFile < 5UL * 1024 * 1024 * 1024 || usage.AvailablePhysical < 3UL * 1024 * 1024 * 1024) && MessageBox.Show(this,"Memory is tight. Another Eternal Love instance may need 3–5 GB and could cause stuttering or fail to start.\n\nLaunch this instance anyway?","Low memory headroom",MessageBoxButton.YesNo,MessageBoxImage.Warning) != MessageBoxResult.Yes) return false;
+            if (profile.WindowsUser.Length == 0 && !useCurrentUser)
+            {
+                Say($"Setting up separate remembered sign-in for Instance {slot}. Windows may request administrator approval.");
+                await Task.Run(() => InstanceAccounts.Ensure(profile.ProcessName));
+                profile.WindowsUser = profile.ProcessName;
+                try { Store.Save(settings); }
+                catch { profile.WindowsUser = ""; throw; }
+                RenderCards();
+            }
+            LoginIdentity? identity = null;
+            var launchSettings = profile.LaunchSettings;
+            launchSettings.Validate();
+            if (profile.WindowsUser.Length > 0 && !useCurrentUser)
+            {
+                await BrowserRequestRelay.Ensure(settings.GameFolder);
+                identity = await LoginDiagnostics.Probe(profile.WindowsUser, prepareWindowed: true, launchSettings);
+                LoginDiagnostics.ValidateStorage(profile.LoginStorageId, identity.RegistryProfileId);
+                if (profile.LoginStorageId.Length == 0)
+                {
+                    profile.LoginStorageId = identity.RegistryProfileId;
+                    try { Store.Save(settings); }
+                    catch { profile.LoginStorageId = ""; throw; }
+                }
+            }
+            if (identity == null) GameDisplay.Prepare(launchSettings);
+            Directory.CreateDirectory(Store.Root);
+            File.WriteAllText(Path.Combine(Store.Root, $"display-launch-{slot}.json"), JsonSerializer.Serialize(new {
+                Launcher = Environment.ProcessPath, AtUtc = DateTime.UtcNow, profile.WindowsUser, UseCurrentUser = useCurrentUser,
+                Arguments = GameDisplay.ArgumentsFor(launchSettings), LaunchSettings = launchSettings,
+                DisplayPreferences = identity?.DisplayPreferences ?? GameDisplay.ReadPreferences()
+            }, new JsonSerializerOptions { WriteIndented = true }));
+            var start = Game.StartInfo(profile,settings.GameFolder,useCurrentUser,launchSettings);
+            if (identity != null) LoginDiagnostics.ApplyEnvironment(start, identity);
             await Task.Run(() => Game.EnsureFiles(profile,settings.GameFolder));
-            var process = Process.Start(start) ?? throw new IOException("Windows could not start this instance.");
+            Process process;
+            try { process = Process.Start(start) ?? throw new IOException("Windows could not start this instance."); }
+            finally { start.Password?.Dispose(); }
             pending[slot] = DateTime.UtcNow;
-            Say($"Starting Instance {slot}.");
-            process.Dispose();
+            Say(useCurrentUser ? $"Starting Instance {slot} with your normal Windows login. Remembered game login is shared for this launch." : $"Starting Instance {slot}.");
+            _ = GameDisplay.WatchStartup(process, identity?.Sid ?? System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value, slot, launchSettings);
             return true;
         }
         catch (Exception e) { Say(e.Message,true); MessageBox.Show(this,e.Message,"Could not launch",MessageBoxButton.OK,MessageBoxImage.Warning); return false; }
@@ -711,7 +820,7 @@ public sealed class LauncherWindow : Window
         var original = JsonSerializer.Serialize(profile);
         var editor = new ProfileEditor(profile) { Owner = this };
         if (editor.ShowDialog() != true) return;
-        try { Store.Save(settings); RenderCards(); Refresh(); Say($"Saved Instance {profile.Slot}. Names apply now."); }
+        try { editor.PrepareAccount(); Store.Save(settings); RenderCards(); Refresh(); Say($"Saved Instance {profile.Slot}. Launch settings apply next time."); }
         catch (Exception e) { var restore = JsonSerializer.Deserialize<Profile>(original)!; settings.Profiles[settings.Profiles.IndexOf(profile)] = restore; MessageBox.Show(this,e.Message,"Could not save profile"); }
     }
     void AddProfile()
@@ -722,7 +831,7 @@ public sealed class LauncherWindow : Window
         var editor = new ProfileEditor(profile) { Owner = this };
         if (editor.ShowDialog() != true) return;
         settings.Profiles.Add(profile);
-        try { Store.Save(settings); RenderCards(); Refresh(); Say($"Instance {next} saved. Select Launch when you are ready to open the game."); }
+        try { editor.PrepareAccount(); Store.Save(settings); RenderCards(); Refresh(); Say($"Instance {next} saved. Select Launch when you are ready to open the game."); }
         catch (Exception e) { settings.Profiles.Remove(profile); MessageBox.Show(this,e.Message,"Could not add profile"); }
     }
     void ChooseFolder()
@@ -740,9 +849,17 @@ public sealed class UniformGridCompat : System.Windows.Controls.Primitives.Unifo
 
 public sealed class ProfileEditor : Window
 {
+    readonly Profile profile;
+    public void PrepareAccount()
+    {
+        if (profile.WindowsUser.Length > 0) return;
+        InstanceAccounts.Ensure(profile.ProcessName);
+        profile.WindowsUser = profile.ProcessName;
+    }
     public ProfileEditor(Profile profile)
     {
-        Title = "Eternal Love � Edit Instance " + profile.Slot; Icon = Branding.Icon; Width = 520; Height = 490; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        this.profile = profile;
+        Title = "Eternal Love · Edit Instance " + profile.Slot; Icon = Branding.Icon; Width = 520; Height = 490; ResizeMode = ResizeMode.NoResize; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(13,22,38)); FontFamily = new FontFamily("Segoe UI");
         var panel = new StackPanel { Margin = new Thickness(28) };
         panel.Children.Add(LauncherWindow.Text("Instance " + profile.Slot,24));
@@ -751,17 +868,43 @@ public sealed class ProfileEditor : Window
             var text = LauncherWindow.Text(label,12,"#AAB6CC"); text.Margin = new Thickness(0,16,0,6); panel.Children.Add(text);
             var box = new TextBox { Text = value, FontSize = 14, Padding = new Thickness(9), MaxLength = 80 }; panel.Children.Add(box); return box;
         }
-        var name = Field("Profile name  �  appears in the game title",profile.Name);
-        var account = Field("Account label or email  �  optional",profile.Account);
-        var server = Field("Server / character note  �  optional",profile.Server);
-        var hint = LauncherWindow.Text("Labels are saved on this PC and do not switch accounts. Enter passwords only in the game.",12,"#AAB6CC"); hint.Margin = new Thickness(0,16,0,16); panel.Children.Add(hint);
+        var name = Field("Profile name  ·  appears in the game title",profile.Name);
+        var account = Field("Account label or email  ·  optional",profile.Account);
+        var server = Field("Server / character note  ·  optional",profile.Server);
+        Height = 650; Width = 600; MaxHeight = SystemParameters.WorkArea.Height - 32;
+        var launchTitle = LauncherWindow.Text("Game launch settings", 16);
+        launchTitle.Margin = new Thickness(0,22,0,8); panel.Children.Add(launchTitle);
+        var choices = new UniformGridCompat(3);
+        ComboBox Choice(string label, string[] values, int selected)
+        {
+            var group = new StackPanel { Margin = new Thickness(0,0,10,0) };
+            var box = new ComboBox { ItemsSource = values, SelectedIndex = selected, FontSize = 14,
+                Padding = new Thickness(8), MinHeight = 36, HorizontalContentAlignment = HorizontalAlignment.Left };
+            System.Windows.Automation.AutomationProperties.SetName(box, label);
+            group.Children.Add(new Label { Content = label, Target = box, Foreground = new SolidColorBrush(Color.FromRgb(170,182,204)), Padding = new Thickness(0,0,0,6) });
+            group.Children.Add(box); choices.Children.Add(group); return box;
+        }
+        var display = Choice("Display", new[] { "540p (windowed)", "720p (windowed)", "Fullscreen" }, (int)profile.LaunchSettings.Display);
+        var graphics = Choice("Graphics", new[] { "Low", "Medium", "High" }, (int)profile.LaunchSettings.Graphics);
+        var fps = Choice("FPS", new[] { "Low · 30 FPS", "Medium · 45 FPS", "High · 60 FPS" }, (int)profile.LaunchSettings.Fps);
+        panel.Children.Add(choices);
+        var launchHint = LauncherWindow.Text("Applied on the next launch. Defaults: 540p, low graphics, low FPS.",12,"#AAB6CC");
+        launchHint.Margin = new Thickness(0,10,0,0); launchHint.TextWrapping = TextWrapping.Wrap; panel.Children.Add(launchHint);
+        var explanation = LauncherWindow.Text(profile.WindowsUser.Length == 0
+            ? "This instance remembers its own game login. Saving will ask for Windows administrator approval to finish setup. Sign into ROM once after setup."
+            : "This instance remembers its own game login. ROM may ask you to sign in again if your session expires.",12,"#AAB6CC");
+        explanation.Margin = new Thickness(0,18,0,0); explanation.TextWrapping = TextWrapping.Wrap; panel.Children.Add(explanation);
+        var hint = LauncherWindow.Text("Windows credentials stay in Credential Manager. Enter game passwords only in ROM.",12,"#AAB6CC"); hint.TextWrapping = TextWrapping.Wrap; hint.Margin = new Thickness(0,16,0,16); panel.Children.Add(hint);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var cancel = new Button { Content = "Cancel", Padding = new Thickness(18,9,18,9), Margin = new Thickness(0,0,8,0), IsCancel = true }; buttons.Children.Add(cancel);
         var save = new Button { Content = "Save profile", Padding = new Thickness(18,9,18,9), IsDefault = true };
         save.Click += (_, _) => {
+            profile.LaunchSettings = new GameLaunchSettings { Display = (GameDisplayMode)display.SelectedIndex,
+                Graphics = (PerformanceLevel)graphics.SelectedIndex, Fps = (PerformanceLevel)fps.SelectedIndex };
             profile.Name = name.Text.Trim(); profile.Account = account.Text.Trim(); profile.Server = server.Text.Trim(); DialogResult = true;
         };
-        buttons.Children.Add(save); panel.Children.Add(buttons); Content = panel;
+        buttons.Children.Add(save); panel.Children.Add(buttons);
+        Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     }
 }
 
@@ -775,6 +918,17 @@ public static class SelfTest
         {
             var settings = new Settings { Profiles = Enumerable.Range(1,4).Select(i => new Profile { Slot = i }).ToList() };
             Store.Validate(settings);
+            var originalWinDir = Environment.GetEnvironmentVariable("windir");
+            try
+            {
+                Environment.SetEnvironmentVariable("windir", null);
+                StartupEnvironment.Initialize();
+                Check(Path.IsPathFullyQualified(Environment.GetEnvironmentVariable("windir")!) && Directory.Exists(Path.Combine(Environment.GetEnvironmentVariable("windir")!, "Fonts")), "missing Windows font environment restored");
+                Environment.SetEnvironmentVariable("windir", "invalid-relative-directory");
+                StartupEnvironment.Initialize();
+                Check(Path.IsPathFullyQualified(Environment.GetEnvironmentVariable("windir")!), "invalid Windows font environment restored");
+            }
+            finally { Environment.SetEnvironmentVariable("windir", originalWinDir); }
             Check(settings.Profiles[0].ProcessName == "ro_win" && settings.Profiles[3].ProcessName == "ro_win3","instance-to-executable mapping");
             settings.Profiles[0].Name = "Main account";
             Check(settings.Profiles[0].Title == "Ragnarok M: Eternal Love - Instance 1 | Main account","account window title");
@@ -784,11 +938,156 @@ public static class SelfTest
             bool rejected = false; try { Store.Validate(copy); } catch (InvalidDataException) { rejected = true; } Check(rejected,"duplicate instance rejected");
             var legacy = JsonSerializer.Deserialize<Settings>("""{"Profiles":[{"Slot":3,"Name":"Main","Account":"user@example.invalid","Server":"A","Isolated":true,"Sandbox":"RO3"}]}""")!;
             Store.Validate(legacy);
+            Check(legacy.Profiles[0].WindowsUser == "", "legacy profiles retain current Windows user");
+            Check(legacy.Profiles[0].LaunchSettings == new GameLaunchSettings(), "legacy profiles default to windowed 540p and low graphics and FPS");
+            var configured = new Profile { Slot = 1, LaunchSettings = new GameLaunchSettings {
+                Display = GameDisplayMode.Windowed720p, Graphics = PerformanceLevel.High, Fps = PerformanceLevel.Medium } };
+            Check(JsonSerializer.Deserialize<Profile>(JsonSerializer.Serialize(configured))!.LaunchSettings == configured.LaunchSettings,
+                "instance launch settings survive JSON round-trip");
+            Check(Game.StartInfo(configured, settings.GameFolder).ArgumentList.Contains("1280"), "launch uses the instance display choice");
+            var independentSettings = GameDisplay.MergeGraphicsSettings("", configured.LaunchSettings);
+            Check(independentSettings.Contains("qualityLevel=3") && independentSettings.Contains("targetFrameRate=3"),
+                "graphics and FPS can be selected independently");
+            Check(GameDisplay.DesktopHeight() > 0, "native desktop height is available for ROM resolution mapping");
+            var probeStart = new ProcessStartInfo();
+            LoginDiagnostics.ConfigureProbeArguments(probeStart, true, configured.LaunchSettings);
+            Check(probeStart.ArgumentList[0] == "--prepare-game-user"
+                && JsonSerializer.Deserialize<GameLaunchSettings>(probeStart.ArgumentList[1]) == configured.LaunchSettings,
+                "hidden-user preparation receives the same instance settings");
+            Check(GameDisplay.ResolutionIndex(GameDisplayMode.Windowed540p, 1080) == 3
+                && GameDisplay.ResolutionIndex(GameDisplayMode.Windowed720p, 1080) == 2
+                && GameDisplay.ResolutionIndex(GameDisplayMode.Windowed540p, 2160) == 5
+                && GameDisplay.ResolutionIndex(GameDisplayMode.Windowed720p, 2160) == 4
+                && GameDisplay.ResolutionIndex(GameDisplayMode.Fullscreen, 2160) == 1,
+                "ROM resolution IDs follow its desktop-dependent resolution list");
+            foreach (var level in Enum.GetValues<PerformanceLevel>())
+            {
+                var options = new GameLaunchSettings { Graphics = level, Fps = level };
+                var merged = GameDisplay.MergeGraphicsSettings("soundVolume=0.25", options);
+                var fpsId = level == PerformanceLevel.Medium ? 3 : level == PerformanceLevel.High ? 2 : 1;
+                Check(merged.Contains($"qualityLevel={(int)level + 1}") && merged.Contains($"targetFrameRate={fpsId}")
+                    && merged.Contains($"shadowRate={(int)level}") && merged.Contains($"effectLv={(int)level}")
+                    && merged.Contains("soundVolume=0.25"), $"{level} graphics and FPS use verified ROM preset values");
+            }
+            var fullOptions = new GameLaunchSettings { Display = GameDisplayMode.Fullscreen };
+            var fullPrefs = new Dictionary<string, int>();
+            GameDisplay.WritePreferences(Array.Empty<string>(), (key, value) => fullPrefs[key] = value, fullOptions);
+            Check(GameDisplay.ArgumentsFor(fullOptions).SequenceEqual(new[] { "-screen-fullscreen", "1" })
+                && fullPrefs["WindowsResolution_h2966854996"] == 1 && fullPrefs["fullScreen_h4289535994"] == 1
+                && fullPrefs["Screenmanager Resolution Use Native_h1405027254"] == 1
+                && !fullPrefs.ContainsKey("Screenmanager Resolution Width_h182942802"), "fullscreen uses native resolution without window-size overrides");
+            bool invalidLaunchRejected = false;
+            try { (new GameLaunchSettings { Fps = (PerformanceLevel)99 }).Validate(); }
+            catch (InvalidDataException) { invalidLaunchRejected = true; }
+            Check(invalidLaunchRejected, "invalid persisted launch options are rejected");
+            Check(Game.StartInfo(new Profile { Slot = 1 }, settings.GameFolder).ArgumentList.SequenceEqual(new[] { "-screen-fullscreen", "0", "-screen-width", "960", "-screen-height", "540" }),
+                "new and legacy instances launch windowed before separate login setup");
+            Check(LoginBrowser.Command(@"C:\Launcher Folder\Launcher.exe", "ROInstanceSSO_test") == "\"C:\\Launcher Folder\\Launcher.exe\" --open-sso-url ROInstanceSSO_test \"%1\"", "SSO browser command quotes executable and URL");
+            var browserProbe = new ProcessStartInfo();
+            browserProbe.Environment["USERPROFILE"] = @"C:\Users\LauncherOwner";
+            browserProbe.Environment["LOCALAPPDATA"] = @"C:\Users\LauncherOwner\AppData\Local";
+            browserProbe.Environment["APPDATA"] = @"C:\Users\LauncherOwner\AppData\Roaming";
+            browserProbe.Environment["SystemRoot"] = @"C:\Windows";
+            LoginBrowser.ConfigureProbe(browserProbe);
+            Check(!browserProbe.Environment.ContainsKey("USERPROFILE") && !browserProbe.Environment.ContainsKey("LOCALAPPDATA")
+                && !browserProbe.Environment.ContainsKey("APPDATA") && browserProbe.Environment["SystemRoot"] == @"C:\Windows",
+                "SSO preparation does not resolve the launcher owner's protected profile folders");
+            Check(LoginBrowser.ValidUrl("https://accounts.google.com/o/oauth2/auth?state=test") && !LoginBrowser.ValidUrl("file:///C:/test") && !LoginBrowser.ValidUrl("https://example.com/\nargument") && !LoginBrowser.ValidUrl("https://user:password@example.com"), "SSO forwarding accepts web URLs and rejects non-web commands and malformed input");
+            Check(BrowserRequestRelay.WebRequest(@"C:\Windows\System32\OpenWith.exe", "\"C:\\Windows\\System32\\OpenWith.exe\" \"https://example.com/login?state=a%2Bb&redirect_uri=http%3A%2F%2Flocalhost\"")
+                == "https://example.com/login?state=a%2Bb&redirect_uri=http%3A%2F%2Flocalhost", "browser fallback preserves the exact sign-in URL");
+            Check(BrowserRequestRelay.WebRequest("rundll32.exe", "rundll32.exe url.dll,FileProtocolHandler \"https://example.com/login?state=a%2Bb&provider=google\"")
+                == "https://example.com/login?state=a%2Bb&provider=google", "Unity rundll32 web requests reach the current user's browser relay");
+            Check(BrowserRequestRelay.WebRequest("rundll32.exe", "rundll32.exe shell32.dll,Control_RunDLL https://example.com") == null,
+                "browser relay rejects unrelated rundll32 entry points");
+            Check(BrowserRequestRelay.WebRequest("cmd.exe", "cmd.exe https://example.com") == null
+                && BrowserRequestRelay.WebRequest("OpenWith.exe", "OpenWith.exe C:\\private.txt") == null
+                && BrowserRequestRelay.WebRequest("OpenWith.exe", "OpenWith.exe https://first.example https://second.example") == null,
+                "browser fallback rejects unrelated programs, local files, and ambiguous URL requests");
+            Check(!BrowserRequestRelay.ManagedParent(Environment.ProcessId, AppContext.BaseDirectory), "browser fallback rejects non-game parent processes");
+            Check(BrowserRequestRelay.TestHandshake().GetAwaiter().GetResult(), "browser helper handshake completes without both pipe endpoints blocking on startup");
+            Check(SignInBrowser.SameBrowser(@"C:\Browser\browser.exe", "owner", @"c:\browser\BROWSER.EXE", "owner")
+                && !SignInBrowser.SameBrowser(@"C:\Browser\browser.exe", "game-user", @"C:\Browser\browser.exe", "owner")
+                && !SignInBrowser.SameBrowser(@"C:\Other\browser.exe", "owner", @"C:\Browser\browser.exe", "owner"),
+                "sign-in focus targets only the current owner's default browser executable");
+            Check(SignInBrowser.MayFocus(new IntPtr(1), new IntPtr(1), new IntPtr(2))
+                && !SignInBrowser.MayFocus(new IntPtr(1), new IntPtr(3), new IntPtr(2)),
+                "delayed browser focus respects a switch to an unrelated window");
+            Check(GameDisplay.PreferenceValue("Screenmanager Fullscreen mode_h123") == 3
+                && GameDisplay.PreferenceValue("Screenmanager Is Fullscreen mode_h456") == 0
+                && GameDisplay.PreferenceValue("Screenmanager Resolution Width_h123") == 960
+                && GameDisplay.PreferenceValue("Screenmanager Resolution Height_h456") == 540
+                && GameDisplay.PreferenceValue("Screenmanager Resolution Use Native_h123") == 0,
+                "saved fullscreen and native-resolution preferences are reset to a bounded window");
+            Check(GameDisplay.PreferenceValue("account_h123") == null && GameDisplay.PreferenceValue("session_h456") == null
+                && GameDisplay.PreferenceValue("Screenmanager unrelated_h123") == null, "window mode preparation leaves login and unrelated preferences untouched");
+            var freshDisplay = new Dictionary<string, int>();
+            GameDisplay.WritePreferences(Array.Empty<string>(), (name, value) => freshDisplay[name] = value);
+            Check(freshDisplay["Screenmanager Fullscreen mode_h3630240806"] == 3
+                && freshDisplay["Screenmanager Is Fullscreen mode_h3981298716"] == 0
+                && freshDisplay["Screenmanager Resolution Width_h182942802"] == 960
+                && freshDisplay["Screenmanager Resolution Height_h2627697771"] == 540,
+                "fresh Windows user receives windowed settings even without an existing game registry");
+            var existingDisplay = new Dictionary<string, int> { ["session_h123"] = 42, ["Screenmanager Fullscreen mode_h3630240806"] = 1 };
+            var lowSettings = GameDisplay.MergeGraphicsSettings("bgmVolume=0.5,qualityLevel=3,targetFrameRate=3,autoPlayChatChannel={qualityLevel=9,other=2},custom='a,b'");
+            Check(lowSettings.Contains("qualityLevel=1,targetFrameRate=1") && lowSettings.Contains("bgmVolume=0.5")
+                && lowSettings.Contains("autoPlayChatChannel={qualityLevel=9,other=2},custom='a,b'"),
+                "low graphics and FPS preserve unrelated and nested settings");
+            Check(GameDisplay.MergeGraphicsSettings(lowSettings) == lowSettings
+                && GameDisplay.MergeGraphicsSettings("").Contains("targetFrameRate=1"), "startup settings seed new users and remain idempotent");
+            bool malformedSettingsRejected = false;
+            try { GameDisplay.MergeGraphicsSettings("custom={broken"); } catch (IOException) { malformedSettingsRejected = true; }
+            Check(malformedSettingsRejected, "malformed ROM settings are rejected before writing");
+            Check(GameDisplay.Arguments.SequenceEqual(new[] { "-screen-fullscreen", "0", "-screen-width", "960", "-screen-height", "540" })
+                && freshDisplay["WindowsResolution_h2966854996"] == 3, "launch arguments and ROM resolution select 540p");
+            GameDisplay.WritePreferences(existingDisplay.Keys.ToArray(), (name, value) => existingDisplay[name] = value);
+            Check(existingDisplay["session_h123"] == 42 && existingDisplay["Screenmanager Fullscreen mode_h3630240806"] == 3,
+                "existing user fullscreen is corrected without replacing sign-in preferences");
+            Check(freshDisplay["fullScreen_h4289535994"] == 0 && GameDisplay.PreferenceValue("fullScreen") == 0,
+                "ROM fullscreen preference is disabled alongside Unity display preferences");
+            Check(GameDisplay.CoversMonitor(new GameDisplay.Rect { Left = -1920, Top = 0, Right = 0, Bottom = 1080 },
+                new GameDisplay.Rect { Left = -1920, Top = 0, Right = 0, Bottom = 1080 })
+                && !GameDisplay.CoversMonitor(new GameDisplay.Rect { Left = 10, Top = 30, Right = 1290, Bottom = 750 },
+                new GameDisplay.Rect { Left = 0, Top = 0, Right = 1920, Bottom = 1080 }), "runtime display check distinguishes fullscreen on a secondary monitor from a bounded game window");
+            Check(LoginDiagnostics.RegistryMatchesSid(@"\REGISTRY\USER\S-1-5-21-123\Software", "S-1-5-21-123")
+                && !LoginDiagnostics.RegistryMatchesSid(@"\REGISTRY\USER\S-1-5-21-456\Software", "S-1-5-21-123"), "registry ownership rejects another user's hive");
+            var storageId = Guid.NewGuid().ToString("D");
+            LoginDiagnostics.ValidateStorage("", storageId);
+            LoginDiagnostics.ValidateStorage(storageId, storageId);
+            bool resetRejected = false;
+            try { LoginDiagnostics.ValidateStorage(storageId, Guid.NewGuid().ToString("D")); } catch (IOException) { resetRejected = true; }
+            Check(resetRejected, "registry profile reset blocks launch instead of silently losing remembered sign-in");
+            var storageProfile = new Profile { Slot = 2, LoginStorageId = storageId };
+            Check(JsonSerializer.Deserialize<Profile>(JsonSerializer.Serialize(storageProfile))!.LoginStorageId == storageId, "registry storage identity persists across launcher reloads");
+            Check(InstanceAccounts.ValidName("ro_win") && InstanceAccounts.ValidName("ro_win11") && !InstanceAccounts.ValidName("ro_win12") && !InstanceAccounts.ValidName("ro_win01") && !InstanceAccounts.ValidName("Administrator"), "managed username bounds");
+            var invalidUser = new Settings { Profiles = new() { new Profile { Slot = 2, WindowsUser = "Administrator" } } };
+            bool invalidUserRejected = false; try { Store.Validate(invalidUser); } catch (InvalidDataException) { invalidUserRejected = true; }
+            Check(invalidUserRejected, "unrelated Windows account rejected");
+            var recovery = Game.StartInfo(new Profile { Slot = 2, WindowsUser = "ro_win1" }, settings.GameFolder, useCurrentUser: true);
+            Check(recovery.UseShellExecute && recovery.UserName.Length == 0 && recovery.ArgumentList.SequenceEqual(new[] { "-screen-fullscreen", "0", "-screen-width", "960", "-screen-height", "540" }), "SSO recovery launches windowed under current user without hidden credentials");
+            var isolated = InstanceAccounts.ConfigureWithPassword(new ProcessStartInfo("game.exe") { WorkingDirectory = "C:\\Game" }, "ro_win1", "test-only");
+            Check(!isolated.UseShellExecute && isolated.LoadUserProfile && isolated.UserName == "ro_win1" && isolated.Domain == Environment.MachineName && isolated.Password!.Length == 9 && isolated.WorkingDirectory == "C:\\Game" && isolated.ArgumentList.Count == 0, "isolated launch loads user profile without command-line password");
+            isolated.Password!.Dispose();
+            var targetIdentity = new LoginIdentity(Environment.MachineName + "\\ro_win1", "test-sid", @"C:\Users\ro_win1",
+                @"C:\Users\ro_win1\AppData\LocalLow", @"C:\Users\ro_win1\AppData\Local", @"C:\Users\ro_win1\AppData\Roaming", false, 0, null);
+            var targetStart = new ProcessStartInfo("game.exe");
+            targetStart.Environment["USERPROFILE"] = @"C:\Users\LauncherOwner";
+            targetStart.Environment["APPDATA"] = @"C:\Users\LauncherOwner\AppData\Roaming";
+            LoginDiagnostics.ApplyEnvironment(targetStart, targetIdentity);
+            Check(targetStart.Environment["USERPROFILE"] == targetIdentity.ProfilePath && targetStart.Environment["APPDATA"] == targetIdentity.RoamingAppDataPath
+                && targetStart.Environment["LOCALAPPDATA"] == targetIdentity.LocalAppDataPath && targetStart.Environment["TEMP"] == @"C:\Users\ro_win1\AppData\Local\Temp"
+                && targetStart.Environment["TMP"] == targetStart.Environment["TEMP"] && targetStart.Environment["USERNAME"] == "ro_win1"
+                && targetStart.Environment["HOMEDRIVE"] == "C:" && targetStart.Environment["HOMEPATH"] == @"\Users\ro_win1",
+                "separate login replaces launcher owner profile and browser environment");
+            var capturedIdentity = LoginDiagnostics.Capture();
+            Check(Path.IsPathFullyQualified(capturedIdentity.ProfilePath) && Path.IsPathFullyQualified(capturedIdentity.LocalAppDataPath)
+                && Path.IsPathFullyQualified(capturedIdentity.RoamingAppDataPath), "login diagnostic resolves native Windows profile folders");
+            var managed = new Profile { Slot = 2, WindowsUser = "ro_win1" };
+            Check(JsonSerializer.Deserialize<Profile>(JsonSerializer.Serialize(managed))!.WindowsUser == "ro_win1" && !JsonSerializer.Serialize(managed).Contains("Password"), "managed profile persists username without credentials");
             Check(legacy.Profiles[0].Name == "Main" && legacy.Profiles[0].Account == "user@example.invalid" && legacy.Profiles[0].Server == "A", "legacy profile labels preserved");
             var migrated = JsonSerializer.Serialize(legacy);
             Check(!migrated.Contains("Isolated") && !migrated.Contains("Sandbox"), "obsolete isolation settings removed on save");
             var legacyStart = Game.StartInfo(legacy.Profiles[0], legacy.GameFolder);
-            Check(legacyStart.FileName.EndsWith("ro_win2.exe") && legacyStart.UseShellExecute && legacyStart.ArgumentList.Count == 0, "legacy isolated profile launches game directly");
+            Check(legacyStart.FileName.EndsWith("ro_win2.exe") && legacyStart.UseShellExecute && legacyStart.ArgumentList.SequenceEqual(new[] { "-screen-fullscreen", "0", "-screen-width", "960", "-screen-height", "540" }), "legacy isolated profile launches game directly in windowed mode");
             var start = Game.StartInfo(settings.Profiles[3],settings.GameFolder);
             Check(start.FileName.EndsWith("ro_win3.exe") && start.WorkingDirectory == settings.GameFolder,"launch target and working directory");
             Check(Native.ReadUsage().Memory.TotalPhysical > 0,"live memory metrics");
@@ -801,20 +1100,27 @@ public static class SelfTest
             var edited = new Profile { Slot = 1 };
             var editor = new ProfileEditor(edited);
             editor.Loaded += (_, _) => editor.Dispatcher.BeginInvoke(new Action(() => {
-                var content = (StackPanel)editor.Content;
+                var content = (StackPanel)((ScrollViewer)editor.Content).Content;
                 var fields = content.Children.OfType<TextBox>().ToArray();
                 fields[0].Text = "  Saved main  "; fields[1].Text = "user@example.invalid"; fields[2].Text = "Server A";
+                var options = content.Children.OfType<UniformGridCompat>().Single().Children.OfType<StackPanel>()
+                    .Select(group => group.Children.OfType<ComboBox>().Single()).ToArray();
+                options[0].SelectedIndex = 2; options[1].SelectedIndex = 1; options[2].SelectedIndex = 2;
                 var actions = content.Children.OfType<StackPanel>().Last();
                 actions.Children.OfType<Button>().Last().RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             }));
             Check(editor.ShowDialog() == true && edited.Name == "Saved main" && edited.Account == "user@example.invalid" && edited.Server == "Server A", "profile editor Save interaction");
+            Check(edited.LaunchSettings == new GameLaunchSettings { Display = GameDisplayMode.Fullscreen,
+                Graphics = PerformanceLevel.Medium, Fps = PerformanceLevel.High }, "editor saves all three instance launch choices");
             var cancelled = new Profile { Slot = 2, Name = "Original" };
             var cancelEditor = new ProfileEditor(cancelled);
             cancelEditor.Loaded += (_, _) => cancelEditor.Dispatcher.BeginInvoke(new Action(() => {
-                ((StackPanel)cancelEditor.Content).Children.OfType<TextBox>().First().Text = "Unsaved";
+                ((StackPanel)((ScrollViewer)cancelEditor.Content).Content).Children.OfType<TextBox>().First().Text = "Unsaved";
+                ((StackPanel)((ScrollViewer)cancelEditor.Content).Content).Children.OfType<UniformGridCompat>().Single().Children.OfType<StackPanel>()
+                    .First().Children.OfType<ComboBox>().Single().SelectedIndex = 1;
                 cancelEditor.DialogResult = false;
             }));
-            Check(cancelEditor.ShowDialog() == false && cancelled.Name == "Original", "profile editor cancellation preserves values");
+            Check(cancelEditor.ShowDialog() == false && cancelled.Name == "Original" && cancelled.LaunchSettings == new GameLaunchSettings(), "profile editor cancellation preserves values");
             LauncherWindow.TestSelection(Check);
             UpdateTests.Run(Check);
             Directory.CreateDirectory(Store.Root); File.WriteAllLines(Path.Combine(Store.Root,"self-test.txt"),report); return 0;

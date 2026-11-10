@@ -49,7 +49,8 @@ public sealed class UpdatesPanel : StackPanel
         hint.Margin = new Thickness(0,10,0,20); body.Children.Add(hint);
         var summary = CreateSummary(); summary.Margin = new Thickness(0,0,0,12); body.Children.Add(summary);
         Children.Remove(actions); ShowControls(true); body.Children.Add(actions);
-        var labels = LauncherWindow.Text("Profile labels identify your game windows. Sign in through the game; remembered login is shared.", 12, "#AAB6CC");
+        var labels = LauncherWindow.Text("Sign in through the game once for each separate-login instance. ROM may ask you to sign in again when a session expires.", 12, "#AAB6CC");
+        labels.TextWrapping = TextWrapping.Wrap;
         labels.Margin = new Thickness(0,24,0,20); body.Children.Add(labels);
         var close = ActionButton("Done", dialog.Close, true); close.IsCancel = true; close.IsDefault = true;
         close.HorizontalAlignment = HorizontalAlignment.Right; close.MinWidth = 90; body.Children.Add(close);
@@ -103,13 +104,13 @@ public sealed class UpdatesPanel : StackPanel
     {
         if (operation != null) return;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30)); operation = cancellation;
-        SetBusy(true); status.Text = $"Launcher v{Updates.CurrentVersion} � Checking for updates.";
+        SetBusy(true); status.Text = $"Launcher v{Updates.CurrentVersion} · Checking for updates…";
         try
         {
             release = await Updates.CheckAsync(cancellation.Token);
-            status.Text = release == null ? $"Launcher v{Updates.CurrentVersion} � You're up to date." : $"Launcher v{Updates.CurrentVersion} � Version {release.Version} is available. Game windows stay open during the update.";
+            status.Text = release == null ? $"Launcher v{Updates.CurrentVersion} · You’re up to date." : $"Launcher v{Updates.CurrentVersion} · Version {release.Version} is available. Game windows stay open during the update.";
         }
-        catch (OperationCanceledException) { status.Text = "Update check timed out. Try again when you're connected."; }
+        catch (OperationCanceledException) { status.Text = "Update check timed out. Try again when you’re connected."; }
         catch (Exception e) { status.Text = "Could not check for updates. " + e.Message; }
         finally { operation = null; SetBusy(false); }
     }
@@ -122,9 +123,9 @@ public sealed class UpdatesPanel : StackPanel
         downloading = true; SetBusy(true);
         try
         {
-            var download = await Updates.DownloadAsync(release, new Progress<int>(percent => status.Text = $"Downloading launcher v{release.Version}. {percent}%"), cancellation.Token);
+            var download = await Updates.DownloadAsync(release, new Progress<int>(percent => status.Text = $"Downloading launcher v{release.Version}… {percent}%"), cancellation.Token);
             if (!canInstall()) { status.Text = "Download verified. Finish launching games, then choose Update and restart again."; return; }
-            downloading = false; SetBusy(true); status.Text = "Update verified. Preparing to restart the launcher.";
+            downloading = false; SetBusy(true); status.Text = "Update verified. Preparing to restart the launcher…";
             await Updates.PrepareInstallAsync(download.Path, download.Hash);
             shutdown();
         }

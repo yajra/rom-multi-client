@@ -48,7 +48,31 @@ Keep up to **12 instance profiles** in one place, with names and notes that make
 
 ## Known limitation: signing in to different accounts
 
-**ROM remembers only one account: the last account you signed in to.** It does not remember a different account for each game window.
+**By default, ROM remembers one account per Windows user: the last account you signed in to.** Instances launched under your normal Windows user share that remembered account.
+
+### Remembering a separate login
+
+New instances automatically use a separate remembered game login. Saving requests Windows administrator approval to create a standard local user matching the executable name (for example, `ro_win1` for Instance 2) and hide it from the Windows sign-in screen. Approve using your current Windows administrator account; setup under a different administrator identity is not supported. There is no checkbox to enable.
+
+The launcher stores a generated Windows password in your Windows Credential Manager and loads that user's profile when launching the game. Sign into ROM on the first launch. Existing sessions can still expire. This is experimental until tested with the current ROM client; closing games owned by another user may need additional permissions.
+
+Use **Edit → Game launch settings** to choose each instance's display, graphics, and FPS:
+
+| Setting | Choices | Default |
+| --- | --- | --- |
+| Display | 540p windowed, 720p windowed, Fullscreen | 540p (960 × 540) |
+| Graphics | Low, Medium, High | Low |
+| FPS | Low (30), Medium (45), High (60) | Low (30) |
+
+Fullscreen uses the game's desktop resolution. New and existing instances without saved choices use the lowest settings. Changes apply on the next launch; running games stay unchanged. Audio, controls, login data, and unrelated preferences are preserved. You can change settings in-game; the instance's saved launch choices are reapplied next time.
+
+Google and other web sign-in requests are relayed to **your current Windows user's default browser**, while the game remains under its separate Windows account. Keep the launcher running. At the first separate-account launch in a launcher session, approve the administrator prompt using your current Windows account. The helper observes Windows web-opening requests only when their parent is a verified game process in your selected game folder, and exits with the launcher. It does not modify the game or save sign-in URLs to disk. Your browser's existing Google session is shared, so choose the intended Google account for each game instance. Browser routing does not guarantee that the game's authentication callback will accept the session.
+
+The launcher requests focus for the sign-in browser and restores it if minimized. Windows may keep the browser in the background; the launcher does not join application input queues to force focus, because that can hang applications. If you switch to a different app while the browser is starting, it leaves that app focused.
+
+If no browser opens, `%LOCALAPPDATA%\ROInstanceLaunchers\browser-relay-status.txt` reports relay readiness, successful browser launches, and whether Windows granted focus, without storing URLs or tokens.
+
+Existing launcher profiles set up their separate login on the next normal launch after the game is closed. Windows may request administrator approval. Sign into ROM once in the new Windows profile. The launcher verifies that the loaded registry belongs to the instance user and checks a persistent storage marker on subsequent launches; it stops if that storage changes unexpectedly. Existing unrelated Windows users are never adopted. Removing a launcher profile preserves its Windows account and saved game data. Credentials are specific to the Windows account that set them up; copying `profiles.json` alone does not transfer them. Game files remain shared, but each Windows user has separate settings and caches.
 
 For example, if you last signed in with Account A, a new game window may show Account A too—even if you named that launcher profile "Account B". To play as Account B, switch accounts and sign in to Account B inside that game window. Repeat this for each window where you want to use a different account.
 
@@ -137,7 +161,7 @@ Get-FileHash -LiteralPath '.\RO-Eternal-Love-Launcher-VERSION-win-x64.exe' -Algo
 
 ## Build or contribute
 
-The launcher is a native **C# / WPF** app targeting **.NET 8**, with no third-party NuGet dependencies.
+The launcher is a native **C# / WPF** app targeting **.NET 8**. The sign-in relay uses Microsoft's TraceEvent library for Windows process-start events.
 
 See the [development guide](docs/DEVELOPMENT.md) for building, self-tests, desktop shortcuts, layout previews, and the release workflow. Use [GitHub issues](https://github.com/yajra/rom-multi-client/issues) for bugs and suggestions.
 
