@@ -2,6 +2,13 @@
 
 Release Please maintains new entries from Conventional Commits. Versions follow Semantic Versioning. Historical releases below were recorded before automation.
 
+## [1.6.0](https://github.com/yajra/rom-multi-client/compare/v1.5.0...v1.6.0) (2026-11-10)
+
+
+### Features
+
+* **instances:** add isolated logins and configurable launch settings ([ad6197e](https://github.com/yajra/rom-multi-client/commit/ad6197e3fdb2826bd76331e841c586403f777309))
+
 ## [1.5.0](https://github.com/yajra/rom-multi-client/compare/v1.4.0...v1.5.0) (2026-11-09)
 
 

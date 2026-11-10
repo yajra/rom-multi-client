@@ -11,12 +11,12 @@
     <Product>RO Eternal Love Launcher</Product>
     <Description>Multi-instance launcher for Ragnarok M: Eternal Love.</Description>
     <ApplicationIcon>Assets\EternalLove.ico</ApplicationIcon>
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Assets\EternalLove.ico" LogicalName="EternalLove.ico" />
+    <EmbeddedResource Include="Assets\EternalLove.ico" LogicalName="EternalLove.ico"/>
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="4.0.0"/>
   </ItemGroup>
 </Project>
