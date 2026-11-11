@@ -65,6 +65,8 @@ The self-tests cover instance mapping, titles, JSON round trips, duplicate profi
 
 `SignInBrowser.cs` opens URLs through the current user's Windows default association and finds an existing browser window by executable path and Windows SID. Focus retries stop after twenty attempts or if the user switches to another window. Never use `AttachThreadInput` here: sharing input queues can make foreground activation block on the game or browser. Windows may decline the focus request. The `--check-browser-focus` diagnostic opens a harmless example.com page and writes its foreground-window result to `%TEMP%\ROInstanceLauncher-browser-focus.txt`.
 
+Separate-user preparation first probes the loaded Windows profile without an explicit environment. The preparation helper then receives that verified user's profile and temporary folders, the browser pipe, and a private `DOTNET_BUNDLE_EXTRACT_BASE_DIR` under its local app data. Removing `TEMP` and `TMP` without supplying a bundle cache makes a single-file helper try to extract into `C:\Windows\.net` before managed code starts. The self-tests start a child helper with the browser environment; run them against the single-file build to cover this failure.
+
 Optional layout previews:
 
 ```powershell

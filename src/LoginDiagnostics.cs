@@ -114,6 +114,7 @@ public static class LoginDiagnostics
         start.Environment["LOCALAPPDATA"] = identity.LocalAppDataPath;
         start.Environment["APPDATA"] = identity.RoamingAppDataPath;
         start.Environment["TEMP"] = start.Environment["TMP"] = Path.Combine(identity.LocalAppDataPath, "Temp");
+        start.Environment["DOTNET_BUNDLE_EXTRACT_BASE_DIR"] = Path.Combine(identity.LocalAppDataPath, "ROInstanceLaunchers", "BundleCache");
         start.Environment["USERNAME"] = identity.User.Substring(identity.User.LastIndexOf('\\') + 1);
         start.Environment["USERDOMAIN"] = Environment.MachineName;
         var root = Path.GetPathRoot(identity.ProfilePath)!;
@@ -123,20 +124,33 @@ public static class LoginDiagnostics
 
     public static int WriteIdentity(bool prepareWindowed = false, GameLaunchSettings? options = null)
     {
+        var stage = "Reading the Windows profile";
         try
         {
             using var writer = new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true };
             var identity = Capture(verifyRegistry: true);
             if (prepareWindowed)
             {
+                stage = "Applying ROM display and graphics settings";
                 GameDisplay.Prepare(options);
+                stage = "Preparing the sign-in browser";
                 LoginBrowser.Prepare();
             }
+            stage = "Reading ROM display preferences";
             identity = identity with { DisplayPreferences = GameDisplay.ReadPreferences() };
             writer.Write(JsonSerializer.Serialize(identity));
             return 0;
         }
-        catch { return 1; }
+        catch (Exception error) { return WriteError(stage, error); }
+    }
+
+    internal static int WriteError(string stage, Exception error)
+    {
+        // Report the operation and exception message only. Never dump profile,
+        // registry, game settings, credential, or sign-in URL contents.
+        using var writer = new StreamWriter(Console.OpenStandardError()) { AutoFlush = true };
+        writer.Write(stage + ": " + error.Message);
+        return 1;
     }
 
     internal static void ConfigureProbeArguments(ProcessStartInfo start, bool prepare, GameLaunchSettings? options)
@@ -150,21 +164,30 @@ public static class LoginDiagnostics
 
     public static async Task<LoginIdentity> Probe(string name, bool prepareWindowed = false, GameLaunchSettings? options = null)
     {
+        // Bootstrap without an explicit environment so Windows supplies the
+        // target user's folders, including on the first launch of a new profile.
+        var targetIdentity = prepareWindowed ? await Probe(name) : null;
         var start = InstanceAccounts.Configure(new ProcessStartInfo(Environment.ProcessPath!) {
-            WorkingDirectory = AppContext.BaseDirectory, CreateNoWindow = true, RedirectStandardOutput = true
+            WorkingDirectory = AppContext.BaseDirectory, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
         }, name);
         ConfigureProbeArguments(start, prepareWindowed, options);
-        if (prepareWindowed) LoginBrowser.ConfigureProbe(start);
+        if (targetIdentity != null) LoginBrowser.ConfigureProbe(start, targetIdentity);
         Process process;
         try { process = Process.Start(start) ?? throw new IOException("Windows could not verify the instance user."); }
         finally { start.Password?.Dispose(); }
         using (process)
         {
             var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
             using var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(20));
             try { await process.WaitForExitAsync(timeout.Token); }
             catch (OperationCanceledException) { try { process.Kill(); } catch { } throw new IOException("Windows-user verification timed out. No game was launched."); }
-            if (process.ExitCode != 0) throw new IOException("Windows could not load the instance's profile. No game was launched.");
+            if (process.ExitCode != 0)
+            {
+                var detail = (await error).Trim();
+                if (detail.Length == 0) detail = $"The profile helper exited with code {process.ExitCode}.";
+                throw new IOException("Windows could not prepare the instance's profile. " + detail + " No game was launched.");
+            }
             var identity = JsonSerializer.Deserialize<LoginIdentity>(await output) ?? throw new IOException("Windows-user verification returned no identity.");
             if (identity.Sid != ExpectedSid(name)) throw new IOException("Windows started the wrong user profile. No game was launched.");
             if (!RegistryMatchesSid(identity.RegistryHive, identity.Sid) || !Guid.TryParse(identity.RegistryProfileId, out _))

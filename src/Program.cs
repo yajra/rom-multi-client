@@ -212,7 +212,7 @@ public static class Program
                 options.Validate();
                 return LoginDiagnostics.WriteIdentity(prepareWindowed: true, options);
             }
-            catch { return 1; }
+            catch (Exception error) { return LoginDiagnostics.WriteError("Reading instance launch settings", error); }
         }
         if (args.Length == 2 && args[0] == "--verify-login-storage") return LoginDiagnostics.VerifyStorage(args[1]).GetAwaiter().GetResult();
         if (args.Length == 3 && args[0] == "--setup-instance-user") return InstanceAccounts.Setup(args[1], args[2]);
@@ -954,6 +954,18 @@ public static class SelfTest
             Check(probeStart.ArgumentList[0] == "--prepare-game-user"
                 && JsonSerializer.Deserialize<GameLaunchSettings>(probeStart.ArgumentList[1]) == configured.LaunchSettings,
                 "hidden-user preparation receives the same instance settings");
+            var invalidProbe = new ProcessStartInfo(Environment.ProcessPath!) {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true
+            };
+            invalidProbe.ArgumentList.Add("--prepare-game-user");
+            invalidProbe.ArgumentList.Add("{\"Fps\":99}");
+            using (var helper = Process.Start(invalidProbe)!)
+            {
+                var error = helper.StandardError.ReadToEndAsync();
+                if (!helper.WaitForExit(10000)) { helper.Kill(); throw new IOException("Profile error reporting test timed out."); }
+                Check(helper.ExitCode == 1 && error.GetAwaiter().GetResult().Contains("Reading instance launch settings: Choose 540p"),
+                    "profile helper reports the underlying failure without loading or changing a profile");
+            }
             Check(GameDisplay.ResolutionIndex(GameDisplayMode.Windowed540p, 1080) == 3
                 && GameDisplay.ResolutionIndex(GameDisplayMode.Windowed720p, 1080) == 2
                 && GameDisplay.ResolutionIndex(GameDisplayMode.Windowed540p, 2160) == 5
@@ -988,10 +1000,29 @@ public static class SelfTest
             browserProbe.Environment["LOCALAPPDATA"] = @"C:\Users\LauncherOwner\AppData\Local";
             browserProbe.Environment["APPDATA"] = @"C:\Users\LauncherOwner\AppData\Roaming";
             browserProbe.Environment["SystemRoot"] = @"C:\Windows";
-            LoginBrowser.ConfigureProbe(browserProbe);
-            Check(!browserProbe.Environment.ContainsKey("USERPROFILE") && !browserProbe.Environment.ContainsKey("LOCALAPPDATA")
-                && !browserProbe.Environment.ContainsKey("APPDATA") && browserProbe.Environment["SystemRoot"] == @"C:\Windows",
-                "SSO preparation does not resolve the launcher owner's protected profile folders");
+            var probeIdentity = LoginDiagnostics.Capture();
+            LoginBrowser.ConfigureProbe(browserProbe, probeIdentity);
+            var bundleProbe = new ProcessStartInfo(Environment.ProcessPath!) {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true,
+                RedirectStandardOutput = true
+            };
+            LoginBrowser.ConfigureProbe(bundleProbe, probeIdentity);
+            bundleProbe.ArgumentList.Add("--probe-instance-user");
+            using (var helper = Process.Start(bundleProbe)!)
+            {
+                var output = helper.StandardOutput.ReadToEndAsync();
+                var error = helper.StandardError.ReadToEndAsync();
+                if (!helper.WaitForExit(10000)) { helper.Kill(); throw new IOException("Bundled profile test timed out."); }
+                Check(helper.ExitCode == 0 && JsonSerializer.Deserialize<LoginIdentity>(output.GetAwaiter().GetResult())?.Sid
+                    == System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value,
+                    "bundled profile helper starts with the browser environment: " + error.GetAwaiter().GetResult());
+            }
+            Check(browserProbe.Environment["USERPROFILE"] == probeIdentity.ProfilePath
+                && browserProbe.Environment["LOCALAPPDATA"] == probeIdentity.LocalAppDataPath
+                && browserProbe.Environment["APPDATA"] == probeIdentity.RoamingAppDataPath
+                && browserProbe.Environment["DOTNET_BUNDLE_EXTRACT_BASE_DIR"] == Path.Combine(probeIdentity.LocalAppDataPath, "ROInstanceLaunchers", "BundleCache")
+                && browserProbe.Environment["SystemRoot"] == @"C:\Windows",
+                "SSO preparation uses verified profile folders and a private bundle cache");
             Check(LoginBrowser.ValidUrl("https://accounts.google.com/o/oauth2/auth?state=test") && !LoginBrowser.ValidUrl("file:///C:/test") && !LoginBrowser.ValidUrl("https://example.com/\nargument") && !LoginBrowser.ValidUrl("https://user:password@example.com"), "SSO forwarding accepts web URLs and rejects non-web commands and malformed input");
             Check(BrowserRequestRelay.WebRequest(@"C:\Windows\System32\OpenWith.exe", "\"C:\\Windows\\System32\\OpenWith.exe\" \"https://example.com/login?state=a%2Bb&redirect_uri=http%3A%2F%2Flocalhost\"")
                 == "https://example.com/login?state=a%2Bb&redirect_uri=http%3A%2F%2Flocalhost", "browser fallback preserves the exact sign-in URL");

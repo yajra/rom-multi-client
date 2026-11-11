@@ -19,13 +19,11 @@ internal static class LoginBrowser
         && Uri.TryCreate(value, UriKind.Absolute, out var uri) && (uri.Scheme == "http" || uri.Scheme == "https")
         && uri.UserInfo.Length == 0 && uri.Host.Length > 0;
 
-    internal static void ConfigureProbe(ProcessStartInfo start)
+    internal static void ConfigureProbe(ProcessStartInfo start, LoginIdentity identity)
     {
-        // Adding the pipe variable makes ProcessStartInfo pass an explicit copy
-        // of our environment. Do not resolve the target's known folders through
-        // the launcher owner's profile paths: that causes Access denied.
-        foreach (var key in new[] { "USERPROFILE", "LOCALAPPDATA", "APPDATA", "HOMEDRIVE", "HOMEPATH", "TEMP", "TMP", "USERNAME", "USERDOMAIN" })
-            start.Environment.Remove(key);
+        // An explicit environment must include the verified target's folders:
+        // a bundled helper needs its writable extraction path before Main runs.
+        LoginDiagnostics.ApplyEnvironment(start, identity);
         start.Environment[EnvironmentKey] = PipeName;
     }
 
