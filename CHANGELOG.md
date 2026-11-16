@@ -2,6 +2,13 @@
 
 Release Please maintains new entries from Conventional Commits. Versions follow Semantic Versioning. Historical releases below were recorded before automation.
 
+## [1.6.2](https://github.com/yajra/rom-multi-client/compare/v1.6.1...v1.6.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* **onboarding:** start empty and check game prerequisites before setup ([b3e625d](https://github.com/yajra/rom-multi-client/commit/b3e625d41b4b2a7a95a43a0d4921503f178c4347))
+
 ## [1.6.1](https://github.com/yajra/rom-multi-client/compare/v1.6.0...v1.6.1) (2026-11-11)
 
 
