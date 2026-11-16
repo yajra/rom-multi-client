@@ -39,8 +39,11 @@ Keep up to **12 instance profiles** in one place, with names and notes that make
 
 1. **Download the EXE** from the [latest release](https://github.com/yajra/rom-multi-client/releases/latest). Choose `RO-Eternal-Love-Launcher-VERSION-win-x64.exe` under **Assets**.
 2. **Keep it in a permanent, writable folder** and double-click it. The release includes the .NET runtime; no installer or separate runtime download is needed.
-3. **Choose your game folder.** Click **Change** beside the folder status and select the directory containing `ro_win.exe` and `ro_win_Data`.
-4. **Name your instances and launch.** Use **Edit** for labels, **+ Add instance** for more profiles, and **Launch** to open a game window.
+3. **Follow the first-run setup.** New installations start with no instances and no assumed game path. Install and update the game using its official launcher, then click **Choose game folder** and select the directory containing `ro_win.exe` and `ro_win_Data`.
+4. **Resolve any prerequisite prompt.** The launcher checks the core game files and their imported Visual C++ v14 libraries before account setup or launch. Missing game files require repair through the official game launcher. For missing Visual C++ libraries, it offers to open [Microsoft's download page](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/): install the **x64** redistributable, then retry. Nothing is installed automatically.
+5. **Add your first instance and launch.** Click **+ Add instance**, name it, approve Windows account setup, and click **Launch**. Add more profiles when you need them. If you cancel setup, you can resume later.
+
+Existing profiles are preserved when updating. If the game was moved or a saved folder does not exist on this PC, the launcher directs you to choose its current location before setting up or starting another instance. These checks cover missing core files and directly imported Visual C++ v14 libraries; the official game launcher may still need to repair damaged files or other game dependencies.
 
 **You need:** Windows 10 or 11 x64, an existing Ragnarok M: Eternal Love installation, and write access to its game folder. Your hardware determines how many instances can run comfortably; the launcher warns when memory is low.
 

@@ -56,7 +56,7 @@ public sealed class Profile
 public sealed class Settings
 {
     public bool CheckForUpdates { get; set; } = true;
-    public string GameFolder { get; set; } = @"C:\Program Files (x86)\XD\ROLauncher";
+    public string GameFolder { get; set; } = "";
     public List<Profile> Profiles { get; set; } = new();
 }
 
@@ -69,7 +69,7 @@ public static class Store
     public static Settings Load(string? filePath = null)
     {
         var target = filePath ?? FilePath;
-        if (!File.Exists(target)) return new Settings { Profiles = Enumerable.Range(1,4).Select(i => new Profile { Slot = i }).ToList() };
+        if (!File.Exists(target)) return new Settings();
         var value = JsonSerializer.Deserialize<Settings>(File.ReadAllText(target)) ?? throw new InvalidDataException("The profile file is empty.");
         Validate(value);
         return value;
@@ -82,7 +82,7 @@ public static class Store
             throw new InvalidDataException("A profile contains an invalid empty field.");
         if (settings.Profiles.Any(p => p.WindowsUser == null || (p.WindowsUser.Length > 0 && p.WindowsUser != p.ProcessName)))
             throw new InvalidDataException("Windows users must match their instance executable names.");
-        if (!Path.IsPathFullyQualified(settings.GameFolder)) throw new InvalidDataException("The game folder must be an absolute path.");
+        if (settings.GameFolder == null || (settings.GameFolder.Length > 0 && !Path.IsPathFullyQualified(settings.GameFolder))) throw new InvalidDataException("The game folder must be an absolute path.");
         foreach (var profile in settings.Profiles)
         {
             if (profile.LaunchSettings == null) throw new InvalidDataException("An instance has missing launch settings.");
@@ -140,6 +140,7 @@ public static class Game
     }
     public static List<Process> Find(Profile profile, string folder)
     {
+        if (string.IsNullOrWhiteSpace(folder)) return new List<Process>();
         var expected = Path.GetFullPath(Path.Combine(folder, profile.ProcessName + ".exe"));
         var found = new List<Process>();
         foreach (var p in Process.GetProcessesByName(profile.ProcessName))
@@ -299,7 +300,7 @@ public static class Program
         }
         return 0;
     }
-    static void SavePreview(Window target, string path)
+    internal static void SavePreview(Window target, string path)
     {
         target.UpdateLayout();
         var bitmap = new RenderTargetBitmap((int)target.ActualWidth, (int)target.ActualHeight, 96, 96, PixelFormats.Pbgra32);
@@ -457,6 +458,7 @@ public sealed class LauncherWindow : Window
         footer.Children.Add(updates);
         Grid.SetRow(footer,5); shell.Children.Add(footer); Content = shell;
         RenderCards(); Refresh();
+        if (!GamePrerequisites.HasGameFolder(settings.GameFolder)) Say("Choose your game folder to finish setup.");
         if (!preview)
         {
             trayIcon = Branding.CreateTrayIcon();
@@ -478,10 +480,11 @@ public sealed class LauncherWindow : Window
         if (settings.Profiles.Count == 0)
         {
             var empty = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(20) };
-            empty.Children.Add(Text("Add your first instance", 22));
-            var hint = Text("Create a profile for each game window you want to launch.", 13, "#AAB6CC");
+            empty.Children.Add(Text("Welcome! Set up your first instance", 22));
+            var hint = Text("1. Install and update Ragnarok M: Eternal Love using its official launcher.\n2. Choose the game folder on this PC. We will check its files and required libraries.\n3. Add an instance, approve Windows account setup, then launch and sign in.", 14, "#AAB6CC");
             hint.Margin = new Thickness(0,8,0,18); empty.Children.Add(hint);
-            empty.Children.Add(Button("+ Add instance", AddProfile, true));
+            empty.Children.Add(Button("Choose game folder", ChooseFolder, true));
+            empty.Children.Add(Button("+ Add instance", AddProfile));
             cards.Children.Add(Panel(empty));
         }
         foreach (var profile in settings.Profiles.OrderBy(p => p.Slot))
@@ -627,10 +630,10 @@ public sealed class LauncherWindow : Window
     }
     void Refresh()
     {
-        var folderReady = File.Exists(Path.Combine(settings.GameFolder, "ro_win.exe")) && Directory.Exists(Path.Combine(settings.GameFolder, "ro_win_Data"));
+        var folderReady = GamePrerequisites.HasGameFolder(settings.GameFolder);
         folderLabel.Text = folderReady ? "Game folder ready" : "Choose game folder";
         folderDot.Foreground = Brush(folderReady ? "#74F8B0" : "#EBCB8B");
-        folderStatus.Text = settings.GameFolder;
+        folderStatus.Text = settings.GameFolder.Length == 0 ? "Select the game installation on this PC to get started" : settings.GameFolder;
         folderStatus.ToolTip = settings.GameFolder;
         folderStatus.Foreground = Brush(folderReady ? "#BDCAE1" : "#EBCB8B");
         var (cpu,memory) = Native.ReadUsage();
@@ -690,6 +693,7 @@ public sealed class LauncherWindow : Window
                 Say("This running instance still shares your Windows login. Close it, then Launch to set up its own remembered sign-in.", true);
             return true;
         }
+        if (!EnsureReady()) return false;
         starting.Add(slot); Refresh();
         try
         {
@@ -817,6 +821,7 @@ public sealed class LauncherWindow : Window
     }
     void Edit(Profile profile)
     {
+        if (profile.WindowsUser.Length == 0 && !EnsureReady()) return;
         var original = JsonSerializer.Serialize(profile);
         var editor = new ProfileEditor(profile) { Owner = this };
         if (editor.ShowDialog() != true) return;
@@ -825,6 +830,7 @@ public sealed class LauncherWindow : Window
     }
     void AddProfile()
     {
+        if (!EnsureReady()) return;
         var next = Enumerable.Range(1,12).FirstOrDefault(i => settings.Profiles.All(p => p.Slot != i));
         if (next == 0) { Say("This launcher supports up to 12 profiles.",true); return; }
         var profile = new Profile { Slot = next };
@@ -836,11 +842,39 @@ public sealed class LauncherWindow : Window
     }
     void ChooseFolder()
     {
-        var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Select your Ragnarok M: Eternal Love game folder", InitialDirectory = settings.GameFolder };
+        var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Select the folder containing ro_win.exe and ro_win_Data", InitialDirectory = Directory.Exists(settings.GameFolder) ? settings.GameFolder : Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) };
         if (picker.ShowDialog(this) != true) return;
         if (!File.Exists(Path.Combine(picker.FolderName,"ro_win.exe")) || !Directory.Exists(Path.Combine(picker.FolderName,"ro_win_Data"))) { Say("That folder must contain ro_win.exe and ro_win_Data.",true); return; }
         var previous = settings.GameFolder; settings.GameFolder = picker.FolderName;
-        try { Store.Save(settings); Refresh(); Say("Game folder saved."); } catch (Exception e) { settings.GameFolder = previous; Say(e.Message,true); }
+        try { Store.Save(settings); RenderCards(); Refresh(); if (CheckPrerequisites()) Say("Game folder checked. Add an instance, then launch and sign in."); } catch (Exception e) { settings.GameFolder = previous; Say(e.Message,true); }
+    }
+
+    bool EnsureReady()
+    {
+        if (!GamePrerequisites.HasGameFolder(settings.GameFolder))
+        {
+            MessageBox.Show(this, "Before adding or launching an instance, install and update Ragnarok M: Eternal Love, then select its folder containing ro_win.exe and ro_win_Data.\n\nChoose the installation on this PC next. Cancel to finish setup later.", "Set up your game", MessageBoxButton.OK, MessageBoxImage.Information);
+            ChooseFolder();
+            // Let users review the result before continuing with account setup.
+            return false;
+        }
+        return CheckPrerequisites();
+    }
+
+    bool CheckPrerequisites()
+    {
+        var issue = GamePrerequisites.Check(settings.GameFolder);
+        if (issue == null) return true;
+        Say(issue.Message, true);
+        if (issue.NeedsRuntime)
+        {
+            if (MessageBox.Show(this, issue.Message + "\n\nOpen Microsoft's download page? Choose the x64 installer, run it, then retry here.",
+                "Install required library", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
+                try { Process.Start(new ProcessStartInfo(GamePrerequisites.RuntimeHelp) { UseShellExecute = true }); }
+                catch (Exception error) { MessageBox.Show(this, "Open " + GamePrerequisites.RuntimeHelp + " in your browser.\n\n" + error.Message, "Download page"); }
+        }
+        else MessageBox.Show(this, issue.Message, "Game setup needs attention", MessageBoxButton.OK, MessageBoxImage.Warning);
+        return false;
     }
 
 }
@@ -916,6 +950,29 @@ public static class SelfTest
         void Check(bool condition,string name) { if (!condition) throw new Exception("FAIL: " + name); report.Add("PASS: " + name); }
         try
         {
+            var fresh = Store.Load(Path.Combine(Store.Root, Guid.NewGuid() + ".json"));
+            Check(fresh.Profiles.Count == 0, "fresh download starts without pre-created instances");
+            Check(fresh.GameFolder == "", "fresh download does not assume a game installation path");
+            var freshFile = Path.Combine(Store.Root, "Tests", "fresh.json");
+            Store.Save(fresh, freshFile);
+            Check(Store.Load(freshFile).Profiles.Count == 0 && Store.Load(freshFile).GameFolder == "", "unfinished onboarding survives restart");
+            Check(GamePrerequisites.Check("") != null, "missing game path is blocked before setup");
+            Check(Game.Find(new Profile { Slot = 1 }, "").Count == 0, "unconfigured profiles cannot match games in the working directory");
+            var gameFixture = Path.Combine(Store.Root, "Tests", Guid.NewGuid().ToString());
+            Directory.CreateDirectory(Path.Combine(gameFixture, "ro_win_Data"));
+            File.WriteAllText(Path.Combine(gameFixture, "ro_win.exe"), "fixture");
+            Check(GamePrerequisites.Check(gameFixture)!.Message.Contains("UnityPlayer.dll"), "missing game library requests official game repair");
+            foreach (var file in GamePrerequisites.GameFiles) File.WriteAllText(Path.Combine(gameFixture, file), "fixture");
+            var runtimeIssue = GamePrerequisites.Check(gameFixture, _ => new[] { "KERNEL32.dll", "VCRUNTIME140.dll" }, _ => false);
+            Check(runtimeIssue?.NeedsRuntime == true && runtimeIssue.Message.Contains("x64"), "missing imported runtime blocks launch and asks for x64 installation");
+            Check(GamePrerequisites.Check(gameFixture, _ => new[] { "VCRUNTIME140.dll" }, _ => true) == null, "retry succeeds after required runtime becomes available");
+            Check(GamePrerequisites.Check(gameFixture, _ => new[] { "KERNEL32.dll" }, _ => false) == null, "runtime is not required when the game does not import it");
+            Check(GamePrerequisites.Check(gameFixture) != null, "invalid game executable produces repair guidance");
+            Check(GamePrerequisites.ReadImports(Environment.ProcessPath!).Any(), "native import inspection reads the actual launcher executable");
+            var welcome = new LauncherWindow(true, fresh);
+            welcome.Show(); welcome.UpdateLayout();
+            Program.SavePreview(welcome, Path.Combine(Store.Root, "onboarding.png"));
+            welcome.AllowExit = true; welcome.Close();
             var settings = new Settings { Profiles = Enumerable.Range(1,4).Select(i => new Profile { Slot = i }).ToList() };
             Store.Validate(settings);
             var originalWinDir = Environment.GetEnvironmentVariable("windir");
