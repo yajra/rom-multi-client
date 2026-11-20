@@ -37,8 +37,8 @@ Keep up to **12 instance profiles** in one place, with names and notes that make
 
 ## Get started
 
-1. **Download the EXE** from the [latest release](https://github.com/yajra/rom-multi-client/releases/latest). Choose `RO-Eternal-Love-Launcher-VERSION-win-x64.exe` under **Assets**.
-2. **Keep it in a permanent, writable folder** and double-click it. The release includes the .NET runtime; no installer or separate runtime download is needed.
+1. **Download the installer** from the [latest release](https://github.com/yajra/rom-multi-client/releases/latest). Choose `RO-Eternal-Love-Launcher-VERSION-win-x64-Setup.exe` under **Assets**.
+2. **Run Setup and approve Windows administrator permission.** It installs to `C:\Program Files\RO Eternal Love Launcher` and adds a Start menu shortcut. This shared location lets the separate instance accounts access the launcher helper. Exit any older portable launcher from its tray icon first. The .NET runtime is included.
 3. **Follow the first-run setup.** New installations start with no instances and no assumed game path. Install and update the game using its official launcher, then click **Choose game folder** and select the directory containing `ro_win.exe` and `ro_win_Data`.
 4. **Resolve any prerequisite prompt.** The launcher checks the core game files and their imported Visual C++ v14 libraries before account setup or launch. Missing game files require repair through the official game launcher. For missing Visual C++ libraries, it offers to open [Microsoft's download page](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/): install the **x64** redistributable, then retry. Nothing is installed automatically.
 5. **Add your first instance and launch.** Click **+ Add instance**, name it, approve Windows account setup, and click **Launch**. Add more profiles when you need them. If you cancel setup, you can resume later.
@@ -105,6 +105,10 @@ Closing the launcher window hides it in the notification area. Double-click its 
 </details>
 
 ## Updates that keep your setup
+
+**Installed with Setup?** Settings offers **Download setup** when an update is available. Download and run the new Setup EXE, exiting the launcher from its tray first. Your profiles and running games are preserved. Uninstall removes the launcher and its shortcuts, while keeping profiles, instance accounts, and game files.
+
+**Portable EXE:** Keep it in a shared folder such as `C:\ROLauncher`, outside your private Downloads/Desktop folders. Portable copies use the updater below.
 
 Open **Settings → Check for updates**. When a newer stable version is available, choose **Update and restart**. Automatic checks run at startup and every six hours when enabled; installation always waits for your action.
 

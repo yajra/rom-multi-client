@@ -31,8 +31,12 @@ jobs:
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
-      - name: Build, test, and package standalone executable
+      - name: Build, test, and package executable and installer
         run: ./Build-Release.ps1
+      - name: Test install, reinstall, and uninstall
+        run: |
+          $version = (Get-Content version.txt -Raw).Trim()
+          ./Test-Installer.ps1 -SetupPath "artifacts/dist/RO-Eternal-Love-Launcher-$version-win-x64-Setup.exe"
       - name: Upload downloadable build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -92,6 +96,9 @@ jobs:
           $version = $env:RELEASE_TAG -replace '^v', ''
           if (!(Test-Path -LiteralPath "dist/RO-Eternal-Love-Launcher-$version-win-x64.exe")) {
             throw 'Release tag does not match the tested executable.'
+          }
+          if (!(Test-Path -LiteralPath "dist/RO-Eternal-Love-Launcher-$version-win-x64-Setup.exe")) {
+            throw 'Release installer is missing.'
           }
           $assets = @(Get-ChildItem -LiteralPath dist -File | ForEach-Object { $_.FullName })
           gh release upload $env:RELEASE_TAG @assets --repo $env:GITHUB_REPOSITORY --clobber

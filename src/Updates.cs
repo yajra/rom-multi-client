@@ -19,6 +19,8 @@ public static class Updates
 {
     const string Api = "https://api.github.com/repos/yajra/rom-multi-client";
     public const string ReleasePage = "https://github.com/yajra/rom-multi-client/releases/latest";
+    internal static bool IsInstalled(string directory) => File.Exists(Path.Combine(directory, "installed.txt"));
+    internal static bool UsesSetup => IsInstalled(AppContext.BaseDirectory);
     public static Version CurrentVersion => new(typeof(Updates).Assembly.GetName().Version!.ToString(3));
     public static string Root => Path.Combine(Store.Root, "Updates");
     public static string ResultPath => Path.Combine(Root, "result.txt");
@@ -144,6 +146,7 @@ public static class Updates
     }
     public static async Task PrepareInstallAsync(string download, string hash)
     {
+        if (UsesSetup) throw new IOException("Download and run the Setup.exe from Release notes to update this installation. Your profiles and games are preserved.");
         var target = Environment.ProcessPath ?? throw new IOException("Cannot locate this launcher.");
         if (Path.GetFileName(target).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase)) throw new IOException("Run the packaged launcher to install updates.");
         // Test write access before asking the running launcher to exit.

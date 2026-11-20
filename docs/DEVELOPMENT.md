@@ -93,3 +93,13 @@ Client mappings were verified on 2026-11-10 against locally extracted `Game`, `F
 Preferences live under `HKCU\Software\X.D. Network Inc.\Ragnarok M`. `Setting_h2752851091` is UTF-8, NUL-terminated REG_BINARY containing Lua-style assignments. Only the graphics/FPS fields are merged; nested tables, audio, controls, and unrelated fields are preserved. Unsupported storage types or unbalanced settings fail before writing. The complete source profile is never copied.
 
 Self-tests cover JSON migration and round-trips, invalid options, all presets and independent graphics/FPS selection, desktop-dependent resolution indices, fullscreen flags, helper argument transport, all launch modes, and actual editor Save/Cancel interactions. Preview rendering verifies layout. Tests do not restart live games; end-to-end game verification occurs on the next launch.
+
+## Windows installer
+
+`Build-Release.ps1` also builds `RO-Eternal-Love-Launcher-VERSION-win-x64-Setup.exe` using a pinned, SHA-256-verified Inno Setup compiler downloaded by `Install-BuildTools.ps1`. Both EXEs are included in `SHA256SUMS.txt`.
+
+Setup installs machine-wide under Program Files with normal inherited read/execute permissions, a Start menu shortcut, an optional desktop shortcut, and an uninstaller. It requests administrator permission, but launches the app afterward as the original user. It does not change game paths, profiles, credentials, or game files. The launcher still asks the user to select their installed game folder.
+
+Installed copies have an `installed.txt` marker and use **Download setup** for upgrades. Portable copies retain the existing in-app updater. Do not grant all users write access to the installation directory. The installer only checks its launcher EXE for file locks; users should exit portable launchers from the tray before switching to the installed copy.
+
+`Test-Installer.ps1` runs only on disposable GitHub-hosted Windows runners. It verifies install/reinstall/uninstall, the installed EXE hash, shortcuts, installed self-tests, and preservation of a profile sentinel and a running game-like process. It does not verify ROM login or game launch on another user's PC.

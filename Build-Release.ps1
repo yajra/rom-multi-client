@@ -25,7 +25,14 @@ $assetPath = Join-Path $distPath $assetName
 Copy-Item -LiteralPath $publishedExe -Destination $assetPath -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $distPath 'README.md') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'CHANGELOG.md') -Destination (Join-Path $distPath 'CHANGELOG.md') -Force
-$hash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath (Join-Path $distPath 'SHA256SUMS.txt') -Value "$hash  $assetName" -Encoding ascii
+$compiler = & (Join-Path $PSScriptRoot 'Install-BuildTools.ps1')
+& $compiler "/DAppVersion=$version" (Join-Path $PSScriptRoot 'installer\Launcher.iss')
+if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
+$setupName = "RO-Eternal-Love-Launcher-$version-win-x64-Setup.exe"
+$checksums = foreach ($name in @($assetName, $setupName)) {
+    $hash = (Get-FileHash -LiteralPath (Join-Path $distPath $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $name"
+}
+Set-Content -LiteralPath (Join-Path $distPath 'SHA256SUMS.txt') -Value $checksums -Encoding ascii
 Write-Output "Release executable: $assetPath"
-Write-Output "SHA-256: $hash"
+Write-Output "Release installer: $(Join-Path $distPath $setupName)"

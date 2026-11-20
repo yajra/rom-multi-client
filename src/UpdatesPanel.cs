@@ -74,7 +74,7 @@ public sealed class UpdatesPanel : StackPanel
         Children.Add(status);
         ShowControls(!compact);
         check = ActionButton("Check for updates", () => { _ = CheckAsync(); });
-        install = ActionButton("Update and restart", () => { _ = InstallAsync(); }, true);
+        install = ActionButton(Updates.UsesSetup ? "Download setup" : "Update and restart", () => { _ = InstallAsync(); }, true);
         cancel = ActionButton("Cancel download", () => operation?.Cancel());
         var notes = ActionButton("Release notes", () => Process.Start(new ProcessStartInfo(Updates.ReleasePage) { UseShellExecute = true }));
         install.Visibility = cancel.Visibility = Visibility.Collapsed;
@@ -117,6 +117,16 @@ public sealed class UpdatesPanel : StackPanel
     async Task InstallAsync()
     {
         if (operation != null || release == null) return;
+        if (Updates.UsesSetup)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(Updates.ReleasePage) { UseShellExecute = true });
+                status.Text = "Download and run Setup.exe, then exit this launcher from the tray before installing. Your profiles and game windows are preserved.";
+            }
+            catch (Exception error) { status.Text = "Could not open the download page. " + error.Message; }
+            return;
+        }
         if (!canInstall()) { status.Text = "Wait for the current game launch to finish, then update the launcher."; return; }
         if (MessageBox.Show(settingsDialog ?? Window.GetWindow(this), $"Install launcher v{release.Version} and restart the launcher?\n\nYour saved profiles and running Eternal Love game windows will be preserved.", Branding.AppName, MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) return;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(10)); operation = cancellation;

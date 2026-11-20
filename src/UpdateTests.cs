@@ -28,6 +28,9 @@ public static class UpdateTests
         check(Reject(() => Updates.ExpectedHash(hash + "  other.exe", "app.exe")) && Reject(() => Updates.ExpectedHash(hash + "  app.exe\n" + hash + "  app.exe", "app.exe")), "missing and duplicate checksums rejected");
         var root = Path.Combine(Store.Root, "Tests", "Update-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        check(!Updates.IsInstalled(root), "portable launcher uses the portable updater");
+        File.WriteAllText(Path.Combine(root, "installed.txt"), "Setup managed");
+        check(Updates.IsInstalled(root), "setup installation routes updates through setup");
         var source = Path.Combine(root, "download.exe"); var target = Path.Combine(root, "launcher.exe"); var backup = target + ".previous";
         try
         {
