@@ -2,6 +2,13 @@
 
 Release Please maintains new entries from Conventional Commits. Versions follow Semantic Versioning. Historical releases below were recorded before automation.
 
+## [1.7.0](https://github.com/yajra/rom-multi-client/compare/v1.6.2...v1.7.0) (2026-11-20)
+
+
+### Features
+
+* **installer:** add shared Windows setup download ([93f08e7](https://github.com/yajra/rom-multi-client/commit/93f08e7e10ab1b8615bebb712cac13e28ffc2ab8))
+
 ## [1.6.2](https://github.com/yajra/rom-multi-client/compare/v1.6.1...v1.6.2) (2026-11-16)
 
 
