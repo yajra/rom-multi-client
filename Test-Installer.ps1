@@ -18,7 +18,14 @@ Copy-Item -LiteralPath "$env:SystemRoot\System32\ping.exe" -Destination $gamePat
 $game = Start-Process $gamePath -ArgumentList '-t 127.0.0.1' -WindowStyle Hidden -PassThru
 function Run-Setup([string]$Path, [string]$LogName) {
     $log = Join-Path $env:RUNNER_TEMP $LogName
-    $process = Start-Process -FilePath $Path -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG="' + $log + '"')) -WindowStyle Hidden -Wait -PassThru
+    Write-Output "Starting $LogName"
+    $process = Start-Process -FilePath $Path -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG="' + $log + '"')) -WindowStyle Hidden -PassThru
+    if (!$process.WaitForExit(90000)) {
+        if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+        $process.Kill()
+        throw "Setup timed out: $LogName"
+    }
+    $process.Refresh()
     if ($process.ExitCode -ne 0) { Get-Content -LiteralPath $log; throw "Setup failed: $($process.ExitCode)" }
 }
 function Check-Preserved {
